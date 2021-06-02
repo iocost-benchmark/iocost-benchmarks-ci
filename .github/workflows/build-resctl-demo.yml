@@ -1,0 +1,44 @@
+name: Build resctl-demo
+
+on:
+  # Don't build on a push but instead build on a schedule.
+  # the cadence of this repository is much higher than resctl-demo.
+  # see https://github.com/iocost-benchmark/iocost-benchmarks-ci/issues/1
+  # 
+  # every Monday at 01:00
+  schedule:
+  - cron: "0 1 * * 1"
+  #push:
+  #pull_request:
+  workflow_dispatch:
+
+jobs:
+  run:
+    name: Build resctl-demo
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Checkout resctl-demo repository
+        uses: actions/checkout@v2
+        with:
+          repository: 'facebookexperimental/resctl-demo'
+          path: 'resctl-demo'
+
+      - name: Build resctl-demo
+        run: cd ${GITHUB_WORKSPACE}/resctl-demo && cargo build --release --all-features
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: resctl-demo
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            resctl-demo/target/release/resctl-bench
+            resctl-demo/target/release/resctl-demo
