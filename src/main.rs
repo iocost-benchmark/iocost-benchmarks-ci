@@ -1,7 +1,8 @@
 use anyhow::Error;
 use structopt::StructOpt;
 
-mod github_actions;
+mod actions;
+mod benchmark;
 
 #[derive(Debug, StructOpt)]
 #[structopt()]
@@ -19,6 +20,6 @@ enum Options {
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     match Options::from_args() {
-        Options::CIEvent { token, context } => github_actions::process_event(token, context).await,
+        Options::CIEvent { token, context } => benchmark::process_event(token, context).await,
     }
 }
