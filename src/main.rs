@@ -42,7 +42,7 @@ async fn main() -> Result<(), Error> {
             benchmark::process_event(options.resctl_bench, token, context).await
         }
         Command::TestMerge { input_files } => {
-            resctl_bench::merge(options.resctl_bench, input_files).await
+            resctl_bench::merge(options.resctl_bench, input_files)
         }
     }
 }

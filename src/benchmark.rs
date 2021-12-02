@@ -81,16 +81,7 @@ pub async fn process_submission(
         // TODO move download code elsewhere
         let response = reqwest::get(url).await?;
         let mut dest = {
-            /* TODO filename ends up incorrect
-            found link="https://github.com/iocost-benchmark/benchmarks/files/7137271/wdc512.json.gz"
-            file to download: '7137271'
-            will be located under: '"/tmp/iocost-benchmark-ciYj1YTQ/7137271"'
-            */
-            println!(
-                "got url: {:?}, path_segs={:?}",
-                response.url(),
-                response.url().path_segments()
-            );
+            // TODO just name the file `submission-x` when x is the index of the submitted result
             let fname = response
                 .url()
                 .path_segments()
@@ -108,27 +99,33 @@ pub async fn process_submission(
         copy(&mut content.as_bytes(), &mut dest)?;
     }
 
-    // TODO test downloads work ok then pass into resctl_bench merge
+    // TODO for each downloaded file:
+    // TODO sanity check we have json.gz files
+    // TODO check if it is a raw or merged result
+    // TODO parse json resctl-bench version, model type
+
     // TODO extract error from resctl-bench
-    resctl_bench::merge(resctl_bench, files_to_merge).await?;
+    resctl_bench::get_version()?;
+    resctl_bench::merge(resctl_bench, files_to_merge)?;
 
     // TODO extract all json files to memory & parse json (error if any fails to extract/parse)
     // TODO sort submissions by model type { modelA = [benchmarkA, benchmarkB], modelB=[benchmarkC]}
 
-    // TODO extract model type from json
     // TODO create a git branch
     // TODO create directories for each model
     // TODO move original json.gz files inside repo (careful not to overwrite)
     // TODO run merge on each model type with existing files in repo
 
+    // TODO respond to the submission; disabled as it was noisy
+    // TODO we should add a date of the run
     // TODO put benchmark result in comment text
     // TODO upload PDFs of benchmark result and attach to comment text
-    let comment_text = "👋 Hello and thank you for your submission!\n\n\nHere is where the result should go once the benchmark has ran.";
+    /*let comment_text = "👋 Hello and thank you for your submission!\n\n\nHere is where the result should go once the benchmark has ran.";
 
     octocrab::instance()
         .issues(event.repository.owner.login, event.repository.name)
         .create_comment(event.issue.id, comment_text)
-        .await?;
+        .await?;*/
 
     Ok(())
 }
