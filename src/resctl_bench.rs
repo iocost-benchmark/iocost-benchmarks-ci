@@ -4,6 +4,7 @@ use std::{io::Write, path::PathBuf, process::Command};
 pub async fn merge(resctl_bench: String, input_files: Vec<PathBuf>) -> Result<(), Error> {
     // ensure files exist
     input_files.iter().try_for_each(|x| -> Result<(), Error> {
+        println!("input_file: {:?}", x);
         if !x.exists() {
             return Err(anyhow!("file does not exist"));
         }

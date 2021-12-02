@@ -1,12 +1,13 @@
 use anyhow::{anyhow, Error};
 use linkify::LinkFinder;
 use octocrab::Octocrab;
-use std::fs::File;
 use std::io::copy;
+use std::{fs::File, path::PathBuf};
 use tempfile::Builder;
 
 use crate::{actions, resctl_bench};
 
+// TODO rename from benchmark as it really isn't that good of a name
 /// Process a GitHub Actions event
 pub async fn process_event(
     resctl_bench: String,
@@ -21,13 +22,11 @@ pub async fn process_event(
     // to communicate with GitHub api
     octocrab::initialise(Octocrab::builder().personal_token(token))?;
 
-    // TODO remove test
-    resctl_bench::merge(resctl_bench, Vec::new()).await?;
-
     match context {
         actions::ContextPayload::Issues { event } => match event.action {
-            actions::IssueEventAction::Opened => process_submission(event).await,
-            actions::IssueEventAction::Edited => process_submission(event).await,
+            actions::IssueEventAction::Opened => process_submission(resctl_bench, event).await,
+            actions::IssueEventAction::Edited => process_submission(resctl_bench, event).await,
+            actions::IssueEventAction::Reopened => process_submission(resctl_bench, event).await,
             actions::IssueEventAction::Closed => Ok(()),
             actions::IssueEventAction::Locked => Ok(()),
             _ => Err(anyhow!("Action {:?} not yet implemented", event.action)),
@@ -44,14 +43,12 @@ pub async fn process_event(
     // TODO handle errors and post as comment
 }
 
-pub async fn process_submission(event: actions::IssueEvent) -> Result<(), Error> {
-    // bail if issue is closed
-    if event.issue.state != actions::IssueState::Open {
-        return Ok(());
-    }
-
-    // bail if issue is locked
-    if event.issue.locked {
+pub async fn process_submission(
+    resctl_bench: String,
+    event: actions::IssueEvent,
+) -> Result<(), Error> {
+    // bail if issue is locked or closed
+    if event.issue.locked || event.issue.state != actions::IssueState::Open {
         return Ok(());
     }
 
@@ -61,12 +58,13 @@ pub async fn process_submission(event: actions::IssueEvent) -> Result<(), Error>
         _ => return Err(anyhow!("submission type not implemented")),
     };
 
-    // extract URLs from the comment body
+    // extract URLs from the comment body and download
+    let mut files_to_merge = Vec::<PathBuf>::new();
     let tmp_dir = Builder::new().prefix("iocost-benchmark-ci").tempdir()?;
     for link in LinkFinder::new().links(&event.issue.body) {
         let url = link.as_str();
 
-        // TODO low priority - use the project URL from event body rather than hard-coded
+        // TODO use the project URL from event body rather than hard-code
         // skip URLs which are not files hosted in this github issue
         if !url.starts_with("https://github.com/iocost-benchmark/benchmarks/files/") {
             return Err(anyhow!("The file must be uploaded to the GitHub issue"));
@@ -83,6 +81,16 @@ pub async fn process_submission(event: actions::IssueEvent) -> Result<(), Error>
         // TODO move download code elsewhere
         let response = reqwest::get(url).await?;
         let mut dest = {
+            /* TODO filename ends up incorrect
+            found link="https://github.com/iocost-benchmark/benchmarks/files/7137271/wdc512.json.gz"
+            file to download: '7137271'
+            will be located under: '"/tmp/iocost-benchmark-ciYj1YTQ/7137271"'
+            */
+            println!(
+                "got url: {:?}, path_segs={:?}",
+                response.url(),
+                response.url().path_segments()
+            );
             let fname = response
                 .url()
                 .path_segments()
@@ -93,11 +101,16 @@ pub async fn process_submission(event: actions::IssueEvent) -> Result<(), Error>
             println!("file to download: '{}'", fname);
             let fname = tmp_dir.path().join(fname);
             println!("will be located under: '{:?}'", fname);
+            files_to_merge.push(fname.clone());
             File::create(fname)?
         };
         let content = response.text().await?;
         copy(&mut content.as_bytes(), &mut dest)?;
     }
+
+    // TODO test downloads work ok then pass into resctl_bench merge
+    // TODO extract error from resctl-bench
+    resctl_bench::merge(resctl_bench, files_to_merge).await?;
 
     // TODO extract all json files to memory & parse json (error if any fails to extract/parse)
     // TODO sort submissions by model type { modelA = [benchmarkA, benchmarkB], modelB=[benchmarkC]}
