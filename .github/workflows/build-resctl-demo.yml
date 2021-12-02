@@ -40,5 +40,7 @@ jobs:
           retention-days: 14
           if-no-files-found: error
           path: |
+            resctl-demo/target/release/rd-agent
+            resctl-demo/target/release/rd-hashd
             resctl-demo/target/release/resctl-bench
             resctl-demo/target/release/resctl-demo
