@@ -5,10 +5,14 @@ use std::fs::File;
 use std::io::copy;
 use tempfile::Builder;
 
-use crate::actions;
+use crate::{actions, resctl_bench};
 
 /// Process a GitHub Actions event
-pub async fn process_event(token: String, context: String) -> Result<(), Error> {
+pub async fn process_event(
+    resctl_bench: String,
+    token: String,
+    context: String,
+) -> Result<(), Error> {
     // parse the context from json
     let context = actions::ContextPayload::from_str(context)?;
     println!("decoded context: {:#?}", context);
@@ -16,6 +20,9 @@ pub async fn process_event(token: String, context: String) -> Result<(), Error> 
     // create a static instance of octocrab using the Actions token
     // to communicate with GitHub api
     octocrab::initialise(Octocrab::builder().personal_token(token))?;
+
+    // TODO remove test
+    resctl_bench::merge(resctl_bench, Vec::new()).await?;
 
     match context {
         actions::ContextPayload::Issues { event } => match event.action {
