@@ -1,4 +1,4 @@
-name: Build iocost-benchmarks-ci
+name: Build import-results
 
 on:
   push:
@@ -23,7 +23,7 @@ jobs:
           path: 'iocost-benchmarks-ci'
 
       - name: Build ci-scripts
-        run: cd ${GITHUB_WORKSPACE}/iocost-benchmarks-ci && cargo build --release --all-features
+        run: cd ${GITHUB_WORKSPACE}/iocost-benchmarks-ci && cargo build --release
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v2
@@ -31,4 +31,4 @@ jobs:
           name: iocost-benchmarks-ci
           if-no-files-found: error
           path: |
-            iocost-benchmarks-ci/target/release/iocost-benchmarks-ci
+            iocost-benchmarks-ci/target/release/import-results

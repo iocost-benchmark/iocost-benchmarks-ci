@@ -4,12 +4,10 @@ on:
   # Don't build on a push but instead build on a schedule.
   # the cadence of this repository is much higher than resctl-demo.
   # see https://github.com/iocost-benchmark/iocost-benchmarks-ci/issues/1
-  # 
+  #
   # every Monday at 01:00
   schedule:
   - cron: "0 1 * * 1"
-  #push:
-  #pull_request:
   workflow_dispatch:
 
 jobs:
@@ -31,7 +29,7 @@ jobs:
           path: 'resctl-demo'
 
       - name: Build resctl-demo
-        run: cd ${GITHUB_WORKSPACE}/resctl-demo && cargo build --release --all-features
+        run: cd ${GITHUB_WORKSPACE}/resctl-demo && cargo build --release
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v2
