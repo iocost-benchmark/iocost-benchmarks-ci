@@ -227,6 +227,11 @@ async fn main() -> Result<()> {
             .await?;
     }
 
+    if directories_to_merge.is_empty() {
+        println!("Found no results files to merge...");
+        return Ok(())
+    }
+
     // Call rectl-bench to merge all files for the directories with new files.
     println!("Merging results...");
 
