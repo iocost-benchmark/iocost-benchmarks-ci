@@ -15,6 +15,7 @@ json = "0.12"
 libflate = "1.1"
 linkify = "0.8"
 md5 = "0.7"
+octocrab = "0.16"
 reqwest = { version= "0.11" }
 semver = "1.0"
 tempfile = "3.2"

@@ -135,7 +135,7 @@ fn run_resctl<S: AsRef<std::ffi::OsStr>>(args: &[S]) -> Result<String> {
         .output()?;
 
     if !output.stderr.is_empty() {
-        panic!("{}", String::from_utf8(output.stderr)?);
+        bail!(String::from_utf8(output.stderr)?);
     }
 
     String::from_utf8(output.stdout).map_err(|e| anyhow!(e))
@@ -156,6 +156,7 @@ fn merge_results_in_dir(path: &Path) -> Result<PathBuf> {
     ];
     arguments.extend(results);
 
+    println!("Merging results with: {}", arguments.join(" "));
     let output = run_resctl(arguments.as_slice())?;
     println!("{}", output);
 
@@ -170,6 +171,15 @@ fn get_summary(path: &Path) -> Result<String> {
     ])
 }
 
+fn validate_file(filename: &str) -> Result<()> {
+    run_resctl(&[
+        "--result",
+        "/tmp/result.json",
+        "merge",
+        filename
+    ]).map(|_| ())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let context = json::parse(&std::env::var("GITHUB_CONTEXT")?)?;
@@ -181,8 +191,15 @@ async fn main() -> Result<()> {
 
     // Download and validate all provided URLs.
     let urls = get_urls(&context)?;
+    let mut errors = vec![];
     for url in urls {
         let filename = download_url(&url).await?;
+
+        if let Err(e) = validate_file(&filename) {
+            errors.push(format!("= File {} failed validation: =\n\n{}", url, e));
+            continue;
+        }
+
         let result = load_result(&filename)?;
 
         let bench_version = get_minor_bench_version(&result)?;
@@ -197,6 +214,17 @@ async fn main() -> Result<()> {
         index.add_path(&database_file)?;
 
         directories_to_merge.insert(model_directory);
+    }
+
+    let issue_id = context["event"]["issue"]["number"].as_u64().unwrap();
+
+    if !errors.is_empty() {
+        octocrab::OctocrabBuilder::new()
+            .personal_token(context["token"].as_str().unwrap().to_string())
+            .build()?
+            .issues("iocost-benchmark", "iocost-benchmarks")
+            .create_comment(issue_id, errors.join("\n\n"))
+            .await?;
     }
 
     // Call rectl-bench to merge all files for the directories with new files.
@@ -218,7 +246,6 @@ async fn main() -> Result<()> {
     let oid = index.write_tree()?;
     let tree = git_repo.find_tree(oid)?;
 
-    let issue_id = context["event"]["issue"]["number"].as_i64().unwrap();
     let description = format!("Closes #{}\n\n{}", issue_id, summaries.join("\n"));
 
     let commit_title = format!(
