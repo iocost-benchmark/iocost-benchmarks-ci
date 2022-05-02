@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 static ALLOWED_PREFIXES: &[&str] = &[
-    "https://github.com/iocost-benchmark/iocost-benchmarks/files/",
+    "https://github.com/",
     "https://iocost-submit.s3.af-south-1.amazonaws.com/",
     "https://iocost-submit.s3.ap-east-1.amazonaws.com/",
     "https://iocost-submit.s3.ap-northeast-1.amazonaws.com/",
@@ -222,7 +222,10 @@ async fn main() -> Result<()> {
         octocrab::OctocrabBuilder::new()
             .personal_token(context["token"].as_str().unwrap().to_string())
             .build()?
-            .issues("iocost-benchmark", "iocost-benchmarks")
+            .issues(
+                context["repository_owner"].as_str().unwrap(),
+                "iocost-benchmarks",
+            )
             .create_comment(issue_id, errors.join("\n\n"))
             .await?;
     }
