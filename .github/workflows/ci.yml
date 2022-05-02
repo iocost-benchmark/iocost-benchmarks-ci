@@ -3,6 +3,9 @@ name: Build import-results
 on:
   push:
   pull_request:
+  # Rebuild periodically to keep the artefacts fresh
+  schedule:
+  - cron: "0 1 * * 1"
   workflow_dispatch:
 
 jobs:
