@@ -6,14 +6,20 @@ on:
   # see https://github.com/iocost-benchmark/iocost-benchmarks-ci/issues/1
   #
   # every Monday at 01:00
+  push:
   schedule:
     - cron: "0 1 * * 1"
   workflow_dispatch:
 
 jobs:
-  run:
+  build:
     name: Build resctl-demo
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        version:
+          - { minor: "v2.1", ref: "v2.1.2" }
+          - { minor: "v2.2", ref: "v2.2.0" }
     steps:
       - name: Install Rust toolchain
         uses: actions-rs/toolchain@v1
@@ -25,20 +31,19 @@ jobs:
       - name: Checkout resctl-demo repository
         uses: actions/checkout@v2
         with:
-          repository: 'facebookexperimental/resctl-demo'
-          path: 'resctl-demo'
+          repository: "facebookexperimental/resctl-demo"
+          path: ${{ format('resctl-demo-{0}', matrix.version.minor) }}
+          ref: ${{ matrix.version.ref }}
 
       - name: Build resctl-demo
-        run: cd ${GITHUB_WORKSPACE}/resctl-demo && cargo build --release
+        run: ${{ format('cd ${{GITHUB_WORKSPACE}}/resctl-demo-{0} && cargo build --release', matrix.version.minor) }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v2
         with:
-          name: resctl-demo
+          name: ${{ format('resctl-demo-{0}', matrix.version.minor) }}
           retention-days: 14
           if-no-files-found: error
           path: |
-            resctl-demo/target/release/rd-agent
-            resctl-demo/target/release/rd-hashd
-            resctl-demo/target/release/resctl-bench
-            resctl-demo/target/release/resctl-demo
+            ${{ format('resctl-demo-{0}/target/release/rd-agent', matrix.version.minor) }}
+            ${{ format('resctl-demo-{0}/target/release/rd-hashd', matrix.version.minor) }}

@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Result};
 use glob::glob;
 use json::JsonValue;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -129,10 +129,9 @@ fn get_normalized_model_name(result: &JsonValue) -> Result<String> {
         .join("_"))
 }
 
-fn run_resctl<S: AsRef<std::ffi::OsStr>>(args: &[S]) -> Result<String> {
-    let output = std::process::Command::new("./resctl-demo/resctl-bench")
-        .args(args)
-        .output()?;
+fn run_resctl<S: AsRef<std::ffi::OsStr>>(version: &str, args: &[S]) -> Result<String> {
+    let bench_path = format!("./resctl-demo-v{}/resctl-bench", version);
+    let output = std::process::Command::new(bench_path).args(args).output()?;
 
     if !output.stderr.is_empty() {
         bail!(String::from_utf8(output.stderr)?);
@@ -141,7 +140,7 @@ fn run_resctl<S: AsRef<std::ffi::OsStr>>(args: &[S]) -> Result<String> {
     String::from_utf8(output.stdout).map_err(|e| anyhow!(e))
 }
 
-fn merge_results_in_dir(path: &Path) -> Result<PathBuf> {
+fn merge_results_in_dir(version: &str, path: &Path) -> Result<PathBuf> {
     let results = glob(&format!("{}/result-*.json.gz", path.to_string_lossy()))
         .unwrap()
         .into_iter()
@@ -157,22 +156,29 @@ fn merge_results_in_dir(path: &Path) -> Result<PathBuf> {
     arguments.extend(results);
 
     println!("Merging results with: {}", arguments.join(" "));
-    let output = run_resctl(arguments.as_slice())?;
+    let output = run_resctl(version, arguments.as_slice())?;
     println!("{}", output);
 
     Ok(merged_path)
 }
 
-fn get_summary(path: &Path) -> Result<String> {
-    run_resctl(&[
-        "--result",
-        path.to_string_lossy().to_string().as_str(),
-        "summary",
-    ])
+fn get_summary(version: &str, path: &Path) -> Result<String> {
+    run_resctl(
+        version,
+        &[
+            "--result",
+            path.to_string_lossy().to_string().as_str(),
+            "summary",
+        ],
+    )
 }
 
-fn validate_file(filename: &str) -> Result<()> {
-    run_resctl(&["--result", "/tmp/result.json", "merge", filename]).map(|_| ())
+fn validate_file(version: &str, filename: &str) -> Result<()> {
+    run_resctl(
+        version,
+        &["--result", "/tmp/result.json", "merge", filename],
+    )
+    .map(|_| ())
 }
 
 #[tokio::main]
@@ -182,7 +188,7 @@ async fn main() -> Result<()> {
     let git_repo = git2::Repository::open(".")?;
     let mut index = git_repo.index()?;
 
-    let mut directories_to_merge = HashSet::new();
+    let mut directories_to_merge = HashMap::new();
 
     // Download and validate all provided URLs.
     let urls = get_urls(&context)?;
@@ -190,14 +196,14 @@ async fn main() -> Result<()> {
     for url in urls {
         let filename = download_url(&url).await?;
 
-        if let Err(e) = validate_file(&filename) {
+        let result = load_result(&filename)?;
+        let bench_version = get_minor_bench_version(&result)?;
+
+        if let Err(e) = validate_file(&bench_version, &filename) {
             errors.push(format!("= File {} failed validation: =\n\n{}", url, e));
             continue;
         }
 
-        let result = load_result(&filename)?;
-
-        let bench_version = get_minor_bench_version(&result)?;
         let model_name = get_normalized_model_name(&result)?;
 
         let model_directory = PathBuf::from(format!("database/{}/{}", bench_version, model_name));
@@ -208,7 +214,10 @@ async fn main() -> Result<()> {
 
         index.add_path(&database_file)?;
 
-        directories_to_merge.insert(model_directory);
+        directories_to_merge
+            .entry(bench_version)
+            .or_insert(vec![])
+            .push(model_directory);
     }
 
     let issue_id = context["event"]["issue"]["number"].as_u64().unwrap();
@@ -234,11 +243,13 @@ async fn main() -> Result<()> {
     println!("Merging results...");
 
     let mut summaries = vec![];
-    for dir in &directories_to_merge {
-        let merged_path = merge_results_in_dir(dir.as_path())?;
-        index.add_path(&merged_path)?;
+    for (version, paths) in &directories_to_merge {
+        for dir in paths {
+            let merged_path = merge_results_in_dir(version, dir.as_path())?;
+            index.add_path(&merged_path)?;
 
-        summaries.push(get_summary(&merged_path)?);
+            summaries.push(get_summary(version, &merged_path)?);
+        }
     }
 
     // Commit the new and changed files.
@@ -254,7 +265,8 @@ async fn main() -> Result<()> {
     let commit_title = format!(
         "Updated {}",
         directories_to_merge
-            .iter()
+            .into_values()
+            .flatten()
             .map(|d| d.to_string_lossy().to_string())
             .collect::<Vec<String>>()
             .join(", ")
