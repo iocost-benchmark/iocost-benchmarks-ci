@@ -7,7 +7,7 @@ on:
   #
   # every Monday at 01:00
   schedule:
-  - cron: "0 1 * * 1"
+    - cron: "0 1 * * 1"
   workflow_dispatch:
 
 jobs:

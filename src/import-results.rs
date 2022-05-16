@@ -172,12 +172,7 @@ fn get_summary(path: &Path) -> Result<String> {
 }
 
 fn validate_file(filename: &str) -> Result<()> {
-    run_resctl(&[
-        "--result",
-        "/tmp/result.json",
-        "merge",
-        filename
-    ]).map(|_| ())
+    run_resctl(&["--result", "/tmp/result.json", "merge", filename]).map(|_| ())
 }
 
 #[tokio::main]
@@ -232,7 +227,7 @@ async fn main() -> Result<()> {
 
     if directories_to_merge.is_empty() {
         println!("Found no results files to merge...");
-        return Ok(())
+        return Ok(());
     }
 
     // Call rectl-bench to merge all files for the directories with new files.
