@@ -267,7 +267,11 @@ async fn main() -> Result<()> {
         directories_to_merge
             .into_values()
             .flatten()
-            .map(|d| d.to_string_lossy().to_string())
+            .map(|d| d
+                .to_string_lossy()
+                .strip_prefix("database/")
+                .unwrap()
+                .to_string())
             .collect::<Vec<String>>()
             .join(", ")
     );
