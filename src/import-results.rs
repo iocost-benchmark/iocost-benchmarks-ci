@@ -1,4 +1,5 @@
 use anyhow::{anyhow, bail, Result};
+use git2::Index;
 use glob::glob;
 use json::JsonValue;
 use std::collections::HashMap;
@@ -87,46 +88,180 @@ fn get_urls(context: &json::JsonValue) -> Result<Vec<String>> {
     Ok(urls)
 }
 
-async fn download_url(url: &str) -> Result<String> {
-    let response = reqwest::get(url).await?;
-
-    let contents = response.bytes().await?;
-
-    // Use md5sum of the data as filename, we only care about exact duplicates.
-    let path = format!("result-{:x}.json.gz", md5::compute(&contents));
-
-    let mut file = fs::File::create(&path)?;
-    file.write_all(&contents)?;
-
-    Ok(path)
+struct BenchResult {
+    url: String,
+    path: String,
+    version: String,
+    model_name: String,
 }
 
-fn load_result(filename: &str) -> Result<JsonValue> {
-    let f = std::fs::File::open(&filename)?;
+impl BenchResult {
+    async fn new(url: String) -> Result<Self> {
+        let path = BenchResult::download_url(&url).await?;
+        let json = BenchResult::load_json(&path)?;
 
-    let mut buf = vec![];
-    libflate::gzip::Decoder::new(f)?.read_to_end(&mut buf)?;
+        let version = {
+            let v = semver::Version::parse(
+                json["sysinfo"]["bench_version"]
+                    .to_string()
+                    .split_whitespace()
+                    .collect::<Vec<&str>>()[0],
+            )?;
+            format!("{}.{}", v.major, v.minor)
+        };
 
-    Ok(json::parse(&String::from_utf8(buf)?)?[0].clone())
-}
-
-fn get_minor_bench_version(result: &JsonValue) -> Result<String> {
-    let version = semver::Version::parse(
-        result["sysinfo"]["bench_version"]
+        let model_name = json["sysinfo"]["sysreqs_report"]["scr_dev_model"]
             .to_string()
             .split_whitespace()
-            .collect::<Vec<&str>>()[0],
-    )?;
+            .collect::<Vec<&str>>()
+            .join("_");
 
-    Ok(format!("{}.{}", version.major, version.minor))
+        Ok(BenchResult {
+            url,
+            path,
+            version,
+            model_name,
+        })
+    }
+
+    async fn download_url(url: &str) -> Result<String> {
+        let response = reqwest::get(url).await?;
+
+        let contents = response.bytes().await?;
+
+        // Use md5sum of the data as filename, we only care about exact duplicates.
+        let path = format!("result-{:x}.json.gz", md5::compute(&contents));
+
+        let mut file = fs::File::create(&path)?;
+        file.write_all(&contents)?;
+
+        Ok(path)
+    }
+
+    fn load_json(filename: &str) -> Result<JsonValue> {
+        let f = std::fs::File::open(&filename)?;
+
+        let mut buf = vec![];
+        libflate::gzip::Decoder::new(f)?.read_to_end(&mut buf)?;
+
+        Ok(json::parse(&String::from_utf8(buf)?)?[0].clone())
+    }
+
+    fn validate(&self) -> Result<()> {
+        run_resctl(
+            &self.version,
+            &["--result", "/tmp/result.json", "merge", &self.path],
+        )
+        .map(|_| ())
+    }
+
+    fn database_directory(&self) -> PathBuf {
+        PathBuf::from(format!("database/{}/{}", self.version, self.model_name))
+    }
+
+    fn add_to_database(&self) -> Result<PathBuf> {
+        let model_directory = self.database_directory();
+        fs::create_dir_all(&model_directory).ok();
+
+        let database_file = model_directory.join(&self.path);
+        fs::rename(&self.path, &database_file)?;
+
+        Ok(database_file)
+    }
+
+    fn merge_id(&self) -> String {
+        format!("{}-{}", self.version, self.model_name)
+    }
 }
 
-fn get_normalized_model_name(result: &JsonValue) -> Result<String> {
-    Ok(result["sysinfo"]["sysreqs_report"]["scr_dev_model"]
-        .to_string()
-        .split_whitespace()
-        .collect::<Vec<&str>>()
-        .join("_"))
+#[derive(Eq, Hash, PartialEq)]
+struct BenchMerge {
+    version: String,
+    model_name: String,
+    path: PathBuf,
+    new_files: Vec<String>,
+}
+
+impl BenchMerge {
+    fn merge(index: &mut Index, results: &[BenchResult]) -> Result<Self> {
+        let reference = &results[0];
+
+        let version = reference.version.clone();
+
+        let path = reference
+            .database_directory()
+            .join("merged-results.json.gz");
+
+        let database_directory = reference.database_directory();
+        Self::do_merge(&version, &database_directory, &path)?;
+
+        index.add_path(&path)?;
+
+        let model_name = reference.model_name.clone();
+
+        let new_files = results
+            .iter()
+            .map(|r| {
+                PathBuf::from(&r.path)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect();
+
+        /* Add the result formatted output as a new file in the repository.
+         * We could upload it to the issue, but the API has no way of doing
+         * it at the moment, and it may actually be better to have it in
+         * the repository. */
+        let base_args = &["--result", &path.to_string_lossy().to_string(), "format"];
+
+        let format = run_resctl(
+            &version,
+            &[base_args.to_vec(), vec!["iocost-tune"]].concat(),
+        )?;
+
+        let format_path = database_directory.join(format!("{}.txt", model_name));
+        let mut file = fs::File::create(&format_path)?;
+        file.write_all(format.as_bytes())?;
+
+        index.add_path(&format_path)?;
+
+        // And add the PDF version as well
+        let pdf_path = database_directory.join(format!("{}.pdf", model_name));
+        let pdf_arg = format!("iocost-tune:pdf={}", pdf_path.to_string_lossy().to_string());
+        run_resctl(&version, &[base_args.to_vec(), vec![&pdf_arg]].concat())?;
+
+        index.add_path(&pdf_path)?;
+
+        Ok(BenchMerge {
+            version,
+            model_name,
+            path,
+            new_files,
+        })
+    }
+
+    fn do_merge(version: &str, directory: &Path, output_path: &Path) -> Result<()> {
+        let results = glob(&format!("{}/result-*.json.gz", directory.to_string_lossy()))
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .map(|p| p.to_string_lossy().to_string());
+
+        let mut arguments = vec![
+            "--result".to_string(),
+            output_path.to_string_lossy().to_string(),
+            "merge".to_string(),
+        ];
+        arguments.extend(results);
+
+        println!("Merging results with: {}", arguments.join(" "));
+        let output = run_resctl(version, arguments.as_slice())?;
+        println!("{}", output);
+
+        Ok(())
+    }
 }
 
 fn run_resctl<S: AsRef<std::ffi::OsStr>>(version: &str, args: &[S]) -> Result<String> {
@@ -140,47 +275,6 @@ fn run_resctl<S: AsRef<std::ffi::OsStr>>(version: &str, args: &[S]) -> Result<St
     String::from_utf8(output.stdout).map_err(|e| anyhow!(e))
 }
 
-fn merge_results_in_dir(version: &str, path: &Path) -> Result<PathBuf> {
-    let results = glob(&format!("{}/result-*.json.gz", path.to_string_lossy()))
-        .unwrap()
-        .into_iter()
-        .flatten()
-        .map(|p| p.to_string_lossy().to_string());
-
-    let merged_path = path.join("merged-results.json.gz");
-    let mut arguments = vec![
-        "--result".to_string(),
-        merged_path.to_string_lossy().to_string(),
-        "merge".to_string(),
-    ];
-    arguments.extend(results);
-
-    println!("Merging results with: {}", arguments.join(" "));
-    let output = run_resctl(version, arguments.as_slice())?;
-    println!("{}", output);
-
-    Ok(merged_path)
-}
-
-fn get_summary(version: &str, path: &Path) -> Result<String> {
-    run_resctl(
-        version,
-        &[
-            "--result",
-            path.to_string_lossy().to_string().as_str(),
-            "summary",
-        ],
-    )
-}
-
-fn validate_file(version: &str, filename: &str) -> Result<()> {
-    run_resctl(
-        version,
-        &["--result", "/tmp/result.json", "merge", filename],
-    )
-    .map(|_| ())
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let context = json::parse(&std::env::var("GITHUB_CONTEXT")?)?;
@@ -188,36 +282,29 @@ async fn main() -> Result<()> {
     let git_repo = git2::Repository::open(".")?;
     let mut index = git_repo.index()?;
 
-    let mut directories_to_merge = HashMap::new();
+    let mut to_merge = HashMap::new();
 
     // Download and validate all provided URLs.
     let urls = get_urls(&context)?;
     let mut errors = vec![];
     for url in urls {
-        let filename = download_url(&url).await?;
+        let bench_result = BenchResult::new(url).await?;
 
-        let result = load_result(&filename)?;
-        let bench_version = get_minor_bench_version(&result)?;
-
-        if let Err(e) = validate_file(&bench_version, &filename) {
-            errors.push(format!("= File {} failed validation: =\n\n{}", url, e));
+        if let Err(e) = bench_result.validate() {
+            errors.push(format!(
+                "= File {} failed validation: =\n\n{}",
+                bench_result.url, e
+            ));
             continue;
         }
 
-        let model_name = get_normalized_model_name(&result)?;
-
-        let model_directory = PathBuf::from(format!("database/{}/{}", bench_version, model_name));
-        fs::create_dir_all(&model_directory).ok();
-
-        let database_file = model_directory.join(&filename);
-        fs::rename(&filename, &database_file)?;
-
+        let database_file = bench_result.add_to_database()?;
         index.add_path(&database_file)?;
 
-        directories_to_merge
-            .entry(bench_version)
+        to_merge
+            .entry(bench_result.merge_id())
             .or_insert(vec![])
-            .push(model_directory);
+            .push(bench_result);
     }
 
     let issue_id = context["event"]["issue"]["number"].as_u64().unwrap();
@@ -234,7 +321,7 @@ async fn main() -> Result<()> {
             .await?;
     }
 
-    if directories_to_merge.is_empty() {
+    if to_merge.is_empty() {
         println!("Found no results files to merge...");
         return Ok(());
     }
@@ -242,14 +329,11 @@ async fn main() -> Result<()> {
     // Call rectl-bench to merge all files for the directories with new files.
     println!("Merging results...");
 
-    let mut summaries = vec![];
-    for (version, paths) in &directories_to_merge {
-        for dir in paths {
-            let merged_path = merge_results_in_dir(version, dir.as_path())?;
-            index.add_path(&merged_path)?;
-
-            summaries.push(get_summary(version, &merged_path)?);
-        }
+    let mut merged = vec![];
+    for (merge_id, bench_results) in &to_merge {
+        println!("Merging {}...", merge_id);
+        let merge = BenchMerge::merge(&mut index, bench_results)?;
+        merged.push(merge);
     }
 
     // Commit the new and changed files.
@@ -260,21 +344,23 @@ async fn main() -> Result<()> {
     let oid = index.write_tree()?;
     let tree = git_repo.find_tree(oid)?;
 
-    let description = format!("Closes #{}\n\n{}", issue_id, summaries.join("\n"));
-
-    let commit_title = format!(
-        "Updated {}",
-        directories_to_merge
-            .into_values()
-            .flatten()
-            .map(|d| d
-                .to_string_lossy()
-                .strip_prefix("database/")
-                .unwrap()
-                .to_string())
+    // FIXME: add more detail about the merged files.
+    let description = format!(
+        "Closes #{}\n\n{}",
+        issue_id,
+        merged
+            .iter()
+            .map(|m| format!(
+                "[{}] {} ({} new files)",
+                m.version,
+                m.model_name,
+                m.new_files.len()
+            ))
             .collect::<Vec<String>>()
             .join(", ")
     );
+
+    let commit_title = format!("Automated update from issue {}", issue_id);
 
     let commit_message = format!("{commit_title}\n\n{description}");
 
