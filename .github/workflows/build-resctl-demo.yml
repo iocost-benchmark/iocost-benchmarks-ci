@@ -47,3 +47,5 @@ jobs:
           path: |
             ${{ format('resctl-demo-{0}/target/release/rd-agent', matrix.version.minor) }}
             ${{ format('resctl-demo-{0}/target/release/rd-hashd', matrix.version.minor) }}
+            ${{ format('resctl-demo-{0}/target/release/resctl-demo', matrix.version.minor) }}
+            ${{ format('resctl-demo-{0}/target/release/resctl-bench', matrix.version.minor) }}
