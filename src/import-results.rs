@@ -1,11 +1,16 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
+use common::{merged_file, save_pdf_to};
 use git2::Index;
-use glob::glob;
 use json::JsonValue;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use crate::common::{database_directory, run_resctl};
+
+mod common;
 
 static ALLOWED_PREFIXES: &[&str] = &[
     "https://github.com/",
@@ -88,15 +93,18 @@ fn get_urls(context: &json::JsonValue) -> Result<Vec<String>> {
     Ok(urls)
 }
 
+#[derive(Serialize)]
 struct BenchResult {
+    issue: u64,
     url: String,
+    #[serde(skip_serializing)]
     path: String,
     version: String,
     model_name: String,
 }
 
 impl BenchResult {
-    async fn new(url: String) -> Result<Self> {
+    async fn new(issue: u64, url: String) -> Result<Self> {
         let path = BenchResult::download_url(&url).await?;
         let json = BenchResult::load_json(&path)?;
 
@@ -117,6 +125,7 @@ impl BenchResult {
             .join("_");
 
         Ok(BenchResult {
+            issue,
             url,
             path,
             version,
@@ -155,18 +164,28 @@ impl BenchResult {
         .map(|_| ())
     }
 
-    fn database_directory(&self) -> PathBuf {
-        PathBuf::from(format!("database/{}/{}", self.version, self.model_name))
-    }
+    fn add_to_database(&self, index: &mut Index) -> Result<()> {
+        // Save PDF for artifact.
+        let pdfs_dir = PathBuf::from(".").join(&format!("pdfs-for-{}", self.issue));
+        save_pdf_to(&self.version, &PathBuf::from(&self.path), &pdfs_dir, None)?;
 
-    fn add_to_database(&self) -> Result<PathBuf> {
-        let model_directory = self.database_directory();
+        let model_directory = database_directory(&self.version, &self.model_name);
         fs::create_dir_all(&model_directory).ok();
 
         let database_file = model_directory.join(&self.path);
         fs::rename(&self.path, &database_file)?;
 
-        Ok(database_file)
+        index.add_path(&database_file)?;
+
+        let mut metadata_path = database_file;
+        metadata_path.set_extension(".metadata");
+
+        let mut metadata = fs::File::create(&metadata_path)?;
+        write!(metadata, "{}", serde_json::to_string(self)?)?;
+
+        index.add_path(&metadata_path)?;
+
+        Ok(())
     }
 
     fn merge_id(&self) -> String {
@@ -174,121 +193,79 @@ impl BenchResult {
     }
 }
 
-#[derive(Eq, Hash, PartialEq)]
-struct BenchMerge {
+struct HighLevel {
     version: String,
     model_name: String,
-    path: PathBuf,
-    new_files: Vec<String>,
+    new_files: u64,
 }
 
-impl BenchMerge {
-    fn merge(index: &mut Index, results: &[BenchResult]) -> Result<Self> {
-        let reference = &results[0];
+impl HighLevel {
+    fn new(version: &str, model_name: &str) -> Self {
+        HighLevel {
+            version: version.to_string(),
+            model_name: model_name.to_string(),
+            new_files: 1,
+        }
+    }
 
-        let version = reference.version.clone();
+    fn increment(&mut self) {
+        self.new_files += 1;
+    }
 
-        let path = reference
-            .database_directory()
-            .join("merged-results.json.gz");
-
-        let database_directory = reference.database_directory();
-        Self::do_merge(&version, &database_directory, &path)?;
-
-        index.add_path(&path)?;
-
-        let model_name = reference.model_name.clone();
-
-        let new_files = results
-            .iter()
-            .map(|r| {
-                PathBuf::from(&r.path)
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string()
+    fn has_high_level(&self) -> bool {
+        let version_str: Vec<u64> = run_resctl(&self.version, &["--version"])
+            .expect("Could not run resctl-bench to get version")
+            .split_whitespace()
+            .nth(1)
+            .expect("Version string has bad format while splitting at space")
+            .split('-')
+            .next()
+            .expect("Version string has bad format while splitting at -")
+            .split('.')
+            .map(|s| {
+                s.parse::<u64>()
+                    .expect("Failed to parse version number, not an integer")
             })
             .collect();
 
-        /* Add the result formatted output as a new file in the repository.
-         * We could upload it to the issue, but the API has no way of doing
-         * it at the moment, and it may actually be better to have it in
-         * the repository. */
-        let base_args = &["--result", &path.to_string_lossy().to_string(), "format"];
+        assert_eq!(version_str.len(), 3);
 
-        let format = run_resctl(
-            &version,
-            &[base_args.to_vec(), vec!["iocost-tune"]].concat(),
-        )?;
-
-        let format_path = database_directory.join(format!("{}.txt", model_name));
-        let mut file = fs::File::create(&format_path)?;
-        file.write_all(format.as_bytes())?;
-
-        index.add_path(&format_path)?;
-
-        // And add the PDF version as well
-        let pdf_path = database_directory.join(format!("{}.pdf", model_name));
-        let pdf_arg = format!("iocost-tune:pdf={}", pdf_path.to_string_lossy().to_string());
-        run_resctl(&version, &[base_args.to_vec(), vec![&pdf_arg]].concat())?;
-
-        index.add_path(&pdf_path)?;
-
-        Ok(BenchMerge {
-            version,
-            model_name,
-            path,
-            new_files,
-        })
+        // The high-level option was introduced in 2.2.3.
+        !(version_str[0] < 2 || version_str[1] < 2 || version_str[2] < 3)
     }
 
-    fn do_merge(version: &str, directory: &Path, output_path: &Path) -> Result<()> {
-        let results = glob(&format!("{}/result-*.json.gz", directory.to_string_lossy()))
-            .unwrap()
-            .into_iter()
-            .flatten()
-            .map(|p| p.to_string_lossy().to_string());
+    fn format_high_level(&self) -> String {
+        if !self.has_high_level() {
+            return String::new();
+        }
 
-        let mut arguments = vec![
-            "--result".to_string(),
-            output_path.to_string_lossy().to_string(),
-            "merge".to_string(),
-        ];
-        arguments.extend(results);
+        let path = merged_file(&self.version, &self.model_name)
+            .to_string_lossy()
+            .to_string();
 
-        println!("Merging results with: {}", arguments.join(" "));
-        let output = run_resctl(version, arguments.as_slice())?;
-        println!("{}", output);
-
-        Ok(())
+        run_resctl(
+            &self.version,
+            &["--result", &path, "format", "iocost-tune:high-level"],
+        )
+        .expect("Failed to run resctl-bench to format high level")
     }
-}
-
-fn run_resctl<S: AsRef<std::ffi::OsStr>>(version: &str, args: &[S]) -> Result<String> {
-    let bench_path = format!("./resctl-demo-v{}/resctl-bench", version);
-    let output = std::process::Command::new(bench_path).args(args).output()?;
-
-    if !output.stderr.is_empty() {
-        bail!(String::from_utf8(output.stderr)?);
-    }
-
-    String::from_utf8(output.stdout).map_err(|e| anyhow!(e))
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let context = json::parse(&std::env::var("GITHUB_CONTEXT")?)?;
+    let issue_id = context["event"]["issue"]["number"].as_u64().unwrap();
 
     let git_repo = git2::Repository::open(".")?;
     let mut index = git_repo.index()?;
 
-    let mut to_merge = HashMap::new();
+    let mut merged = HashMap::new();
 
     // Download and validate all provided URLs.
     let urls = get_urls(&context)?;
     let mut errors = vec![];
     for url in urls {
-        let bench_result = BenchResult::new(url).await?;
+        let bench_result = BenchResult::new(issue_id, url).await?;
 
         if let Err(e) = bench_result.validate() {
             errors.push(format!(
@@ -298,16 +275,13 @@ async fn main() -> Result<()> {
             continue;
         }
 
-        let database_file = bench_result.add_to_database()?;
-        index.add_path(&database_file)?;
+        bench_result.add_to_database(&mut index)?;
 
-        to_merge
+        merged
             .entry(bench_result.merge_id())
-            .or_insert(vec![])
-            .push(bench_result);
+            .or_insert_with(|| HighLevel::new(&bench_result.version, &bench_result.model_name))
+            .increment();
     }
-
-    let issue_id = context["event"]["issue"]["number"].as_u64().unwrap();
 
     if !errors.is_empty() {
         octocrab::OctocrabBuilder::new()
@@ -321,19 +295,9 @@ async fn main() -> Result<()> {
             .await?;
     }
 
-    if to_merge.is_empty() {
-        println!("Found no results files to merge...");
+    if merged.is_empty() {
+        println!("Found no new results files to merge...");
         return Ok(());
-    }
-
-    // Call rectl-bench to merge all files for the directories with new files.
-    println!("Merging results...");
-
-    let mut merged = vec![];
-    for (merge_id, bench_results) in &to_merge {
-        println!("Merging {}...", merge_id);
-        let merge = BenchMerge::merge(&mut index, bench_results)?;
-        merged.push(merge);
     }
 
     // Commit the new and changed files.
@@ -344,20 +308,20 @@ async fn main() -> Result<()> {
     let oid = index.write_tree()?;
     let tree = git_repo.find_tree(oid)?;
 
-    // FIXME: add more detail about the merged files.
     let description = format!(
         "Closes #{}\n\n{}",
         issue_id,
         merged
             .iter()
-            .map(|m| format!(
-                "[{}] {} ({} new files)",
-                m.version,
-                m.model_name,
-                m.new_files.len()
+            .map(|(_, v)| format!(
+                "- [{} ({})] {} new files\n{}",
+                v.model_name,
+                v.version,
+                v.new_files,
+                v.format_high_level()
             ))
             .collect::<Vec<String>>()
-            .join(", ")
+            .join("\n")
     );
 
     let commit_title = format!("Automated update from issue {}", issue_id);
