@@ -7,10 +7,16 @@ edition = "2021"
 name = "import-results"
 path = "src/import-results.rs"
 
+[[bin]]
+name = "merge-results"
+path = "src/merge-results.rs"
+
 [dependencies]
 anyhow = "1.0"
+chrono = "0.4.19"
 git2 = "0.14"
 glob = "0.3"
+itertools = "0.10.3"
 json = "0.12"
 libflate = "1.1"
 linkify = "0.8"
@@ -18,5 +24,7 @@ md5 = "0.7"
 octocrab = "0.16"
 reqwest = { version= "0.11" }
 semver = "1.0"
+serde = "1.0.137"
+serde_json = "1.0.81"
 tempfile = "3.2"
 tokio = { version = "1.17", features = ["macros", "rt-multi-thread"] }

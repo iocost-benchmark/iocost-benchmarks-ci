@@ -5,7 +5,7 @@ on:
   pull_request:
   # Rebuild periodically to keep the artefacts fresh
   schedule:
-  - cron: "0 1 * * 1"
+    - cron: "0 1 * * 1"
   workflow_dispatch:
 
 jobs:
@@ -23,7 +23,7 @@ jobs:
       - name: Checkoutm iocost-benchmarks-ci repository
         uses: actions/checkout@v2
         with:
-          path: 'iocost-benchmarks-ci'
+          path: "iocost-benchmarks-ci"
 
       - name: Build ci-scripts
         run: cd ${GITHUB_WORKSPACE}/iocost-benchmarks-ci && cargo build --release
@@ -35,3 +35,4 @@ jobs:
           if-no-files-found: error
           path: |
             iocost-benchmarks-ci/target/release/import-results
+            iocost-benchmarks-ci/target/release/merge-results
