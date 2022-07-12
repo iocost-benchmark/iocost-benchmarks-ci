@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use common::{merged_file, save_pdf_to};
+use common::{merged_file, save_pdf_to, BenchMerge};
 use git2::Index;
 use json::JsonValue;
 use serde::Serialize;
@@ -239,13 +239,23 @@ impl HighLevel {
             return String::new();
         }
 
-        let path = merged_file(&self.version, &self.model_name)
-            .to_string_lossy()
-            .to_string();
+        let path = merged_file(&self.version, &self.model_name);
+
+        BenchMerge::do_merge(
+            &self.version,
+            &database_directory(&self.version, &self.model_name),
+            &path,
+        )
+        .expect("Failed to do the merge for obtaining high level summary");
 
         run_resctl(
             &self.version,
-            &["--result", &path, "format", "iocost-tune:high-level"],
+            &[
+                "--result",
+                &path.to_string_lossy(),
+                "format",
+                "iocost-tune:high-level",
+            ],
         )
         .expect("Failed to run resctl-bench to format high level")
     }
