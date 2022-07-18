@@ -19,7 +19,7 @@ jobs:
       matrix:
         version:
           - { minor: "v2.1", ref: "v2.1.2" }
-          - { minor: "v2.2", ref: "v2.2.2" }
+          - { minor: "v2.2", ref: "main" }
     steps:
       - name: Install Rust toolchain
         uses: actions-rs/toolchain@v1
