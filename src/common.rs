@@ -1,5 +1,4 @@
 use anyhow::{anyhow, bail, Result};
-use git2::Index;
 use glob::glob;
 use std::fs;
 use std::io::Write;
@@ -14,37 +13,11 @@ pub struct BenchMerge {
 
 #[allow(dead_code)]
 impl BenchMerge {
-    pub fn merge(index: &mut Index, version: String, model_name: String) -> Result<Self> {
+    pub fn merge(version: String, model_name: String) -> Result<Self> {
         let directory = database_directory(&version, &model_name);
         let output_path = merged_file(&version, &model_name);
 
         Self::do_merge(&version, &directory, &output_path)?;
-
-        index.add_path(&output_path)?;
-
-        /* Add the result formatted output as a new file in the repository.
-         * We could upload it to the issue, but the API has no way of doing
-         * it at the moment, and it may actually be better to have it in
-         * the repository. */
-        let base_args = &["--result", &output_path.to_string_lossy(), "format"];
-
-        let format = run_resctl(
-            &version,
-            &[base_args.to_vec(), vec!["iocost-tune"]].concat(),
-        )?;
-
-        let format_path = directory.join(format!("{}.txt", model_name));
-        let mut file = fs::File::create(&format_path)?;
-        file.write_all(format.as_bytes())?;
-
-        index.add_path(&format_path)?;
-
-        // And add the PDF version as well
-        let pdf_path = directory.join(format!("{}.pdf", model_name));
-        let pdf_arg = format!("iocost-tune:pdf={}", pdf_path.to_string_lossy());
-        run_resctl(&version, &[base_args.to_vec(), vec![&pdf_arg]].concat())?;
-
-        index.add_path(&pdf_path)?;
 
         Ok(BenchMerge {
             version,
