@@ -1,11 +1,50 @@
 use anyhow::{anyhow, bail, Result};
 use glob::glob;
+use semver::{Version, VersionReq};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Eq, Hash, PartialEq)]
+pub enum MajorMinor {
+    V2_1,
+    V2_2,
+}
+
+#[derive(Debug, Eq, Hash, PartialEq)]
+pub struct BenchVersion {
+    pub major_minor: MajorMinor,
+    pub semver: Version,
+}
+
+impl BenchVersion {
+    pub fn new(version: &str) -> Self {
+        let major_minor = match version {
+            "2.1" => MajorMinor::V2_1,
+            "2.2" => MajorMinor::V2_2,
+            _ => unimplemented!(),
+        };
+
+        let version_str = run_resctl(version, &["--version"])
+            .expect("Could not run resctl-bench to get version")
+            .split_whitespace()
+            .nth(1)
+            .expect("Version string has bad format while splitting at space")
+            .to_owned();
+
+        let semver = Version::parse(&version_str).expect("Failed to parse version with semver");
+
+        BenchVersion {
+            major_minor,
+            semver,
+        }
+    }
+}
+
+#[derive(Debug, Eq, Hash, PartialEq)]
 pub struct BenchMerge {
-    pub version: String,
+    pub version: BenchVersion,
+    pub version_str: String,
     pub model_name: String,
     pub path: PathBuf,
 }
@@ -19,7 +58,8 @@ impl BenchMerge {
         Self::do_merge(&version, &directory, &output_path)?;
 
         Ok(BenchMerge {
-            version,
+            version: BenchVersion::new(&version),
+            version_str: version,
             model_name,
             path: output_path,
         })
@@ -48,7 +88,39 @@ impl BenchMerge {
 
     pub fn save_pdf_in(&self, target_dir: &Path) -> Result<()> {
         let filename = self.build_descriptive_filename("pdf");
-        save_pdf_to(&self.version, &self.path, target_dir, filename)
+        save_pdf_to(&self.version_str, &self.path, target_dir, filename)
+    }
+
+    pub fn create_hwdb_in(&self, target_dir: &Path) -> Result<()> {
+        // The hwdb subcommand got introduced in 2.2.4.
+        if !VersionReq::parse(">=2.2.4")
+            .unwrap()
+            .matches(&self.version.semver)
+        {
+            println!(
+                "Skipping hwdb generation as this version does not have hwdb support: {}",
+                self.version.semver
+            );
+            return Ok(());
+        }
+
+        let filename = self.build_descriptive_filename("hwdb");
+
+        let output = run_resctl(
+            &self.version_str,
+            &[
+                "--result",
+                &self.path.to_string_lossy(),
+                "format",
+                "iocost-tune:hwdb",
+            ],
+        )?;
+
+        fs::create_dir_all(target_dir).expect("Could not create the target hwdb directory");
+        let mut file = fs::File::create(target_dir.join(filename))?;
+        write!(file, "{}", output)?;
+
+        Ok(())
     }
 
     pub fn build_descriptive_filename(&self, extension: &str) -> String {
@@ -62,7 +134,7 @@ impl BenchMerge {
 
         format!(
             "iocost-tune-{}-{}-{}{}",
-            self.version, self.model_name, date, extension
+            self.version_str, self.model_name, date, extension
         )
     }
 }

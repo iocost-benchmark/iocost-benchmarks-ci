@@ -178,7 +178,7 @@ impl BenchResult {
         index.add_path(&database_file)?;
 
         let mut metadata_path = database_file;
-        metadata_path.set_extension(".metadata");
+        metadata_path.set_extension("metadata");
 
         let mut metadata = fs::File::create(&metadata_path)?;
         write!(metadata, "{}", serde_json::to_string(self)?)?;
