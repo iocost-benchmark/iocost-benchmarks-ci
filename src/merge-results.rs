@@ -1,6 +1,7 @@
 use anyhow::Result;
 use glob::glob;
-use std::path::PathBuf;
+use std::io::Write;
+use std::{fs, path::PathBuf};
 
 use crate::common::BenchMerge;
 
@@ -26,8 +27,24 @@ async fn main() -> Result<()> {
                 .save_pdf_in(&PathBuf::from("pdfs"))
                 .expect("Failed to save PDF");
 
-            merged.push(merge);
+            merge
+                .create_hwdb_in(&PathBuf::from("hwdb-inputs"))
+                .expect("Failed to create a hwdb file");
         }
+    }
+
+    let mut hwdb_file =
+        fs::File::create("90-iocost-tune.hwdb").expect("Failed to create hwdb file");
+
+    writeln!(hwdb_file, "# This file is auto-generated.")?;
+    writeln!(hwdb_file, "#")?;
+    writeln!(hwdb_file, "# Match key format:")?;
+    writeln!(hwdb_file, "# block:<dev or sysfs path>:name:<model name>:")?;
+    writeln!(hwdb_file, "#")?;
+
+    for input in glob("hwdb-inputs/*.hwdb").unwrap().into_iter().flatten() {
+        let contents = fs::read_to_string(input).expect("Failed to read input hwdb file");
+        writeln!(hwdb_file, "{}\n", contents)?;
     }
 
     Ok(())
