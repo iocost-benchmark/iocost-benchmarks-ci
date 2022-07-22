@@ -25,8 +25,6 @@ async fn main() -> Result<()> {
             merge
                 .save_pdf_in(&PathBuf::from("pdfs"))
                 .expect("Failed to save PDF");
-
-            merged.push(merge);
         }
     }
 

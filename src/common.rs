@@ -1,7 +1,6 @@
 use anyhow::{anyhow, bail, Result};
 use glob::glob;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Eq, Hash, PartialEq)]
