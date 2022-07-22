@@ -324,7 +324,7 @@ async fn main() -> Result<()> {
         merged
             .iter()
             .map(|(_, v)| format!(
-                "- [{} ({})] {} new files\n{}",
+                "[{} ({})] {} new files\n{}",
                 v.model_name,
                 v.version,
                 v.new_files,
