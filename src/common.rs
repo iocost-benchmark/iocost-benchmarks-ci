@@ -120,5 +120,9 @@ pub fn database_directory(version: &str, model_name: &str) -> PathBuf {
 }
 
 pub fn merged_file(version: &str, model_name: &str) -> PathBuf {
-    database_directory(version, model_name).join("merged-results.json.gz")
+    fs::create_dir_all("merged-results").expect("Failed to create merged results dir");
+    PathBuf::from("merged-results").join(&format!(
+        "{}-{}-merged-results.json.gz",
+        version, model_name
+    ))
 }
