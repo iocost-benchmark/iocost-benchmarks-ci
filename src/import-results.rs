@@ -79,7 +79,7 @@ fn get_urls(context: &json::JsonValue) -> Result<Vec<String>> {
     for link in linkify::LinkFinder::new().links(body) {
         let link = link.as_str();
 
-        if is_url_allowlisted(link) {
+        if is_url_allowlisted(link) && link.ends_with(".json.gz") {
             println!("URL found: {}", link);
             urls.push(link.to_string());
         } else {
