@@ -79,8 +79,8 @@ impl BenchMerge {
         ];
         arguments.extend(results);
 
-        println!("Merging results with: {}", arguments.join(" "));
-        let output = run_resctl(version, arguments.as_slice())?;
+        let mut output = format!("Merging results with: {}", arguments.join(" "));
+        output.push_str(&run_resctl(version, arguments.as_slice())?);
         println!("{}", output);
 
         Ok(())

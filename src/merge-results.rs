@@ -1,5 +1,6 @@
 use anyhow::Result;
 use glob::glob;
+use rayon::prelude::*;
 use std::io::Write;
 use std::{fs, path::PathBuf};
 
@@ -15,13 +16,15 @@ async fn main() -> Result<()> {
         }
 
         let version = entry.file_name().unwrap().to_string_lossy().to_string();
-        for model_dir in glob(&format!("database/{}/*", version))
+        let paths: Vec<PathBuf> = glob(&format!("database/{}/*", version))
             .unwrap()
             .into_iter()
             .flatten()
-        {
+            .collect();
+
+        paths.par_iter().for_each(|model_dir: &PathBuf| {
             let model_name = model_dir.file_name().unwrap().to_string_lossy().to_string();
-            let merge = BenchMerge::merge(version.clone(), model_name)?;
+            let merge = BenchMerge::merge(version.clone(), model_name).expect("Failed to merge");
 
             merge
                 .save_pdf_in(&PathBuf::from("pdfs"))
@@ -30,7 +33,7 @@ async fn main() -> Result<()> {
             merge
                 .create_hwdb_in(&PathBuf::from("hwdb-inputs"))
                 .expect("Failed to create a hwdb file");
-        }
+        });
     }
 
     let mut hwdb_file =
