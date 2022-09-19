@@ -92,8 +92,9 @@ impl BenchMerge {
     }
 
     pub fn create_hwdb_in(&self, target_dir: &Path) -> Result<()> {
-        // The hwdb subcommand got introduced in 2.2.4.
-        if !VersionReq::parse(">=2.2.4")
+        // The hwdb subcommand got introduced in 2.2.4. We use -0 here so that pre-released
+        // versions from git are also considered to match.
+        if !VersionReq::parse(">=2.2.4-0")
             .unwrap()
             .matches(&self.version.semver)
         {
