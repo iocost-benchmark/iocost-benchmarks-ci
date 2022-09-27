@@ -1,11 +1,10 @@
 use anyhow::{bail, Result};
-use common::{merged_file, save_pdf_to, BenchMerge};
+use common::{load_json, merged_file, save_pdf_to, BenchMerge};
 use git2::Index;
-use json::JsonValue;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::PathBuf;
 
 use crate::common::{database_directory, run_resctl};
@@ -106,7 +105,7 @@ struct BenchResult {
 impl BenchResult {
     async fn new(issue: u64, url: String) -> Result<Self> {
         let path = BenchResult::download_url(&url).await?;
-        let json = BenchResult::load_json(&path)?;
+        let json = &load_json(&path)?[0];
 
         let version = {
             let v = semver::Version::parse(
@@ -145,15 +144,6 @@ impl BenchResult {
         file.write_all(&contents)?;
 
         Ok(path)
-    }
-
-    fn load_json(filename: &str) -> Result<JsonValue> {
-        let f = std::fs::File::open(&filename)?;
-
-        let mut buf = vec![];
-        libflate::gzip::Decoder::new(f)?.read_to_end(&mut buf)?;
-
-        Ok(json::parse(&String::from_utf8(buf)?)?[0].clone())
     }
 
     fn validate(&self) -> Result<()> {

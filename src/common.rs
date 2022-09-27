@@ -1,8 +1,9 @@
 use anyhow::{anyhow, bail, Result};
 use glob::glob;
+use json::JsonValue;
 use semver::{Version, VersionReq};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Eq, Hash, PartialEq)]
@@ -47,6 +48,7 @@ pub struct BenchMerge {
     pub version_str: String,
     pub model_name: String,
     pub path: PathBuf,
+    pub data_points: usize,
 }
 
 #[allow(dead_code)]
@@ -57,11 +59,24 @@ impl BenchMerge {
 
         Self::do_merge(&version, &directory, &output_path)?;
 
+        // TODO: we probably want to move this processing to resctl-bench format output.
+        let result = load_json(&output_path.to_string_lossy())?;
+        let result = result
+            .members()
+            .find(|v| v["spec"]["kind"] == "iocost-tune")
+            .expect("Could not find iocost-tune spec in merge file");
+
+        let data_points = result["result"]["data"]["MOF"]["data"].members().count()
+            + result["result"]["data"]["MOF"]["outliers"]
+                .members()
+                .count();
+
         Ok(BenchMerge {
             version: BenchVersion::new(&version),
             version_str: version,
             model_name,
             path: output_path,
+            data_points,
         })
     }
 
@@ -164,7 +179,7 @@ pub fn save_pdf_to(
         }
     };
 
-    println!("PDF Path: {:#?}", pdf_path);
+    println!("PDF Path: {:#?}\n", pdf_path);
     run_resctl(
         version,
         &[
@@ -175,6 +190,16 @@ pub fn save_pdf_to(
         ],
     )
     .map(|_| ())
+}
+
+#[allow(dead_code)]
+pub fn load_json(filename: &str) -> Result<JsonValue> {
+    let f = std::fs::File::open(&filename)?;
+
+    let mut buf = vec![];
+    libflate::gzip::Decoder::new(f)?.read_to_end(&mut buf)?;
+
+    Ok(json::parse(&String::from_utf8(buf)?)?)
 }
 
 pub fn run_resctl<S: AsRef<std::ffi::OsStr>>(version: &str, args: &[S]) -> Result<String> {
