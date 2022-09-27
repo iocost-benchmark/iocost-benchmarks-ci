@@ -18,6 +18,11 @@ async fn main() -> Result<()> {
         }
 
         let version = entry.file_name().unwrap().to_string_lossy().to_string();
+        if version == "2.1" {
+            println!("Ignoring 2.1 version, since it does not generate hwdb files.");
+            continue;
+        }
+
         let paths: Vec<PathBuf> = glob(&format!("database/{}/*", version))
             .unwrap()
             .into_iter()
