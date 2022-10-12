@@ -229,7 +229,7 @@ impl HighLevel {
             return String::new();
         }
 
-        let path = merged_file(&self.version, &self.model_name);
+        let path = merged_file(&self.version, &self.model_name, None);
 
         BenchMerge::do_merge(
             &self.version,

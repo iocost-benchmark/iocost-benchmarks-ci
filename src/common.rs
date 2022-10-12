@@ -2,9 +2,13 @@ use anyhow::{anyhow, bail, Result};
 use glob::glob;
 use json::JsonValue;
 use semver::{Version, VersionReq};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+
+const MINIMUM_DATA_POINTS: usize = 4;
+const MINIMUM_DIFFERENT_RESULTS: u64 = 1;
 
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub enum MajorMinor {
@@ -49,27 +53,27 @@ pub struct BenchMerge {
     pub model_name: String,
     pub path: PathBuf,
     pub data_points: usize,
+    pub fwmerge: Option<BenchFWMerge>,
+}
+
+#[derive(Debug, Eq, Hash, PartialEq)]
+pub struct BenchFWMerge {
+    pub fwrev: String,
+    pub path: PathBuf,
+    pub data_points: usize,
 }
 
 #[allow(dead_code)]
 impl BenchMerge {
     pub fn merge(version: String, model_name: String) -> Result<Self> {
         let directory = database_directory(&version, &model_name);
-        let output_path = merged_file(&version, &model_name);
+        let output_path = merged_file(&version, &model_name, None);
 
         Self::do_merge(&version, &directory, &output_path)?;
 
-        // TODO: we probably want to move this processing to resctl-bench format output.
-        let result = load_json(&output_path.to_string_lossy())?;
-        let result = result
-            .members()
-            .find(|v| v["spec"]["kind"] == "iocost-tune")
-            .expect("Could not find iocost-tune spec in merge file");
+        let data_points = Self::get_data_points(&output_path)?;
 
-        let data_points = result["result"]["data"]["MOF"]["data"].members().count()
-            + result["result"]["data"]["MOF"]["outliers"]
-                .members()
-                .count();
+        let fwmerge = Self::try_fwmerge(&version, &model_name, &directory)?;
 
         Ok(BenchMerge {
             version: BenchVersion::new(&version),
@@ -77,14 +81,92 @@ impl BenchMerge {
             model_name,
             path: output_path,
             data_points,
+            fwmerge,
         })
     }
 
+    fn try_fwmerge(
+        version: &str,
+        model_name: &str,
+        directory: &Path,
+    ) -> Result<Option<BenchFWMerge>> {
+        let results = Self::result_paths_for(directory)?;
+
+        let mut fwrev_map: HashMap<String, Vec<PathBuf>> = HashMap::new();
+
+        // This uses alphabetical sorting to determine the latest firmware revision.
+        // Based on how fwupd compares versions for NVME devices it should be good
+        // enough, as it uses the PLAIN format for version numbers of NVME devices,
+        // and does a simple g_strcmp0() for those.
+        let max_fwrev = results
+            .iter()
+            .map(|r| {
+                let json = &load_json(&r.to_string_lossy()).expect("Failed to load result")[0];
+                let fwrev = json["sysinfo"]["sysreqs_report"]["scr_dev_fwrev"].to_string();
+
+                fwrev_map.entry(fwrev.clone()).or_default().push(r.clone());
+
+                fwrev
+            })
+            .max_by(|a, b| a.cmp(b))
+            .unwrap();
+
+        // If there are almost the same number of results for the generic merge as there are for the specific fwrev,
+        // just use the generic one.
+        if (fwrev_map.len() as i64 - results.len() as i64).unsigned_abs()
+            < MINIMUM_DIFFERENT_RESULTS
+        {
+            println!(
+                "Model {} fwrev {} has almost the same input as the generic one, no specific solution generated.",
+                model_name, max_fwrev
+            );
+            return Ok(None);
+        }
+
+        let output_path = merged_file(version, model_name, max_fwrev.as_str());
+        let mut arguments = vec![
+            "--result".to_string(),
+            output_path.to_string_lossy().to_string(),
+            "merge".to_string(),
+        ];
+        arguments.extend(
+            fwrev_map
+                .get(&max_fwrev)
+                .unwrap()
+                .iter()
+                .map(|p| p.to_string_lossy().to_string()),
+        );
+
+        let mut output = format!(
+            "Merging FW-specific results with: {}\n",
+            arguments.join(" ")
+        );
+        output.push_str(&run_resctl(version, arguments.as_slice())?);
+        println!("{}", output);
+
+        let data_points = Self::get_data_points(&output_path)?;
+        if data_points >= MINIMUM_DATA_POINTS {
+            println!(
+                "Model {} fwrev {} has enough data points: {}, generating specific solution.",
+                model_name, max_fwrev, data_points
+            );
+            Ok(Some(BenchFWMerge {
+                fwrev: max_fwrev,
+                path: output_path,
+                data_points,
+            }))
+        } else {
+            println!(
+                "Model {} fwrev {} has too few data points: {}, no specific solution generated.",
+                model_name, max_fwrev, data_points
+            );
+            Ok(None)
+        }
+    }
+
     pub fn do_merge(version: &str, directory: &Path, output_path: &Path) -> Result<()> {
-        let results = glob(&format!("{}/result-*.json.gz", directory.to_string_lossy()))
-            .unwrap()
+        let results = Self::result_paths_for(directory)?
             .into_iter()
-            .flatten()
             .map(|p| p.to_string_lossy().to_string());
 
         let mut arguments = vec![
@@ -94,19 +176,44 @@ impl BenchMerge {
         ];
         arguments.extend(results);
 
-        let mut output = format!("Merging results with: {}", arguments.join(" "));
+        let mut output = format!("Merging results with: {}\n", arguments.join(" "));
         output.push_str(&run_resctl(version, arguments.as_slice())?);
         println!("{}", output);
 
         Ok(())
     }
 
+    fn get_data_points(path: &Path) -> Result<usize> {
+        // TODO: we probably want to move this processing to resctl-bench format output.
+        let result = load_json(&path.to_string_lossy())?;
+        let result = result
+            .members()
+            .find(|v| v["spec"]["kind"] == "iocost-tune")
+            .expect("Could not find iocost-tune spec in merge file");
+
+        Ok(result["result"]["data"]["MOF"]["data"].members().count()
+            + result["result"]["data"]["MOF"]["outliers"]
+                .members()
+                .count())
+    }
+
+    fn result_paths_for(directory: &Path) -> Result<Vec<PathBuf>> {
+        Ok(
+            glob(&format!("{}/result-*.json.gz", directory.to_string_lossy()))
+                .unwrap()
+                .flatten()
+                .collect(),
+        )
+    }
+
     pub fn save_pdf_in(&self, target_dir: &Path) -> Result<()> {
-        let filename = self.build_descriptive_filename("pdf");
+        let filename = self.build_descriptive_filename("pdf", None);
         save_pdf_to(&self.version_str, &self.path, target_dir, filename)
     }
 
     pub fn create_hwdb_in(&self, target_dir: &Path) -> Result<()> {
+        fs::create_dir_all(target_dir).expect("Could not create the target hwdb directory");
+
         // The hwdb subcommand got introduced in 2.2.4. We use -0 here so that pre-released
         // versions from git are also considered to match.
         if !VersionReq::parse(">=2.2.4-0")
@@ -120,7 +227,9 @@ impl BenchMerge {
             return Ok(());
         }
 
-        let filename = self.build_descriptive_filename("hwdb");
+        let filename = self.build_descriptive_filename("hwdb", None);
+
+        let mut file = fs::File::create(target_dir.join(filename))?;
 
         let output = run_resctl(
             &self.version_str,
@@ -132,14 +241,30 @@ impl BenchMerge {
             ],
         )?;
 
-        fs::create_dir_all(target_dir).expect("Could not create the target hwdb directory");
-        let mut file = fs::File::create(target_dir.join(filename))?;
         write!(file, "{}", output)?;
+
+        if let Some(fwmerge) = &self.fwmerge {
+            let output = run_resctl(
+                &self.version_str,
+                &[
+                    "--result",
+                    &fwmerge.path.to_string_lossy(),
+                    "format",
+                    "iocost-tune:hwdb-fwrev",
+                ],
+            )?;
+
+            write!(file, "\n{}", output)?;
+        }
 
         Ok(())
     }
 
-    pub fn build_descriptive_filename(&self, extension: &str) -> String {
+    pub fn build_descriptive_filename<'a, D: Into<Option<&'a str>>>(
+        &self,
+        extension: &str,
+        detail: D,
+    ) -> String {
         let extension = if extension.is_empty() {
             extension.to_string()
         } else {
@@ -148,9 +273,14 @@ impl BenchMerge {
 
         let date = chrono::offset::Utc::today();
 
+        let detail = match detail.into() {
+            Some(d) => format!("{}-", d),
+            None => "".to_owned(),
+        };
+
         format!(
-            "iocost-tune-{}-{}-{}{}",
-            self.version_str, self.model_name, date, extension
+            "iocost-tune-{}-{}-{}{}{}",
+            self.version_str, self.model_name, date, detail, extension
         )
     }
 }
@@ -217,10 +347,20 @@ pub fn database_directory(version: &str, model_name: &str) -> PathBuf {
     PathBuf::from(format!("database/{}/{}", version, model_name))
 }
 
-pub fn merged_file(version: &str, model_name: &str) -> PathBuf {
+pub fn merged_file<'a, D: Into<Option<&'a str>>>(
+    version: &str,
+    model_name: &str,
+    detail: D,
+) -> PathBuf {
     fs::create_dir_all("merged-results").expect("Failed to create merged results dir");
+
+    let detail = match detail.into() {
+        Some(d) => format!("{}-", d),
+        None => "".to_owned(),
+    };
+
     PathBuf::from("merged-results").join(&format!(
-        "{}-{}-merged-results.json.gz",
-        version, model_name
+        "{}-{}-{}merged-results.json.gz",
+        version, model_name, detail
     ))
 }

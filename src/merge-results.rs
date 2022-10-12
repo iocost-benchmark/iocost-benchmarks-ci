@@ -69,7 +69,10 @@ async fn main() -> Result<()> {
 
     writeln!(hwdb_file, "#")?;
     writeln!(hwdb_file, "# Match key format:")?;
-    writeln!(hwdb_file, "# block:<devpath>:name:<model name>:")?;
+    writeln!(
+        hwdb_file,
+        "# block:<devpath>:name:<model name>:fwrev:<firmware revision>:"
+    )?;
     writeln!(hwdb_file)?;
 
     let models: Vec<String> = merges.iter().map(|m| m.key().clone()).collect();
@@ -89,7 +92,7 @@ async fn main() -> Result<()> {
         let best = match std::env::var(&override_var) {
             Err(std::env::VarError::NotPresent) => {
                 let merge = alternatives.iter().max_by_key(|x| x.data_points).unwrap();
-                let best = merge.build_descriptive_filename("hwdb");
+                let best = merge.build_descriptive_filename("hwdb", None);
                 println!("{:>2} datapoints:\t{}", merge.data_points, best);
                 best
             }
