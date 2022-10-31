@@ -73,7 +73,7 @@ impl BenchMerge {
 
         let data_points = Self::get_data_points(&output_path)?;
 
-        let fwmerge = Self::try_fwmerge(&version, &model_name, &directory)?;
+        let fwmerge = Self::try_fwmerge(data_points, &version, &model_name, &directory)?;
 
         Ok(BenchMerge {
             version: BenchVersion::new(&version),
@@ -86,6 +86,7 @@ impl BenchMerge {
     }
 
     fn try_fwmerge(
+        common_data_points: usize,
         version: &str,
         model_name: &str,
         directory: &Path,
@@ -111,18 +112,6 @@ impl BenchMerge {
             .max_by(|a, b| a.cmp(b))
             .unwrap();
 
-        // If there are almost the same number of results for the generic merge as there are for the specific fwrev,
-        // just use the generic one.
-        if (fwrev_map.len() as i64 - results.len() as i64).unsigned_abs()
-            < MINIMUM_DIFFERENT_RESULTS
-        {
-            println!(
-                "Model {} fwrev {} has almost the same input as the generic one, no specific solution generated.",
-                model_name, max_fwrev
-            );
-            return Ok(None);
-        }
-
         let output_path = merged_file(version, model_name, max_fwrev.as_str());
         let mut arguments = vec![
             "--result".to_string(),
@@ -145,23 +134,34 @@ impl BenchMerge {
         println!("{}", output);
 
         let data_points = Self::get_data_points(&output_path)?;
-        if data_points >= MINIMUM_DATA_POINTS {
+        // If there are almost the same number of results for the generic merge as there are for the specific fwrev,
+        // just use the generic one.
+        if (data_points as i64 - common_data_points as i64).unsigned_abs()
+            >= MINIMUM_DIFFERENT_RESULTS
+            && data_points >= MINIMUM_DATA_POINTS
+        {
             println!(
                 "Model {} fwrev {} has enough data points: {}, generating specific solution.",
                 model_name, max_fwrev, data_points
             );
-            Ok(Some(BenchFWMerge {
+            return Ok(Some(BenchFWMerge {
                 fwrev: max_fwrev,
                 path: output_path,
                 data_points,
-            }))
-        } else {
+            }));
+        }
+
+        if data_points < MINIMUM_DATA_POINTS {
             println!(
                 "Model {} fwrev {} has too few data points: {}, no specific solution generated.",
                 model_name, max_fwrev, data_points
             );
-            Ok(None)
+        } else {
+            println!("Model {} fwrev {} has almost the same input as the generic one, no specific solution generated.", model_name, max_fwrev);
         }
+
+        std::fs::remove_file(output_path)?;
+        Ok(None)
     }
 
     pub fn do_merge(version: &str, directory: &Path, output_path: &Path) -> Result<()> {
