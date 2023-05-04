@@ -21,7 +21,7 @@ jobs:
           override: true
 
       - name: Checkoutm iocost-benchmarks-ci repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           path: "iocost-benchmarks-ci"
 
@@ -29,7 +29,7 @@ jobs:
         run: cd ${GITHUB_WORKSPACE}/iocost-benchmarks-ci && cargo build --release
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: iocost-benchmarks-ci
           if-no-files-found: error
