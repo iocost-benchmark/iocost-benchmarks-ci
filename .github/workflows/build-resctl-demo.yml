@@ -29,7 +29,7 @@ jobs:
           override: true
 
       - name: Checkout resctl-demo repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           repository: "facebookexperimental/resctl-demo"
           path: ${{ format('resctl-demo-{0}', matrix.version.minor) }}
@@ -39,7 +39,7 @@ jobs:
         run: ${{ format('cd ${{GITHUB_WORKSPACE}}/resctl-demo-{0} && cargo build --release', matrix.version.minor) }}
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: ${{ format('resctl-demo-{0}', matrix.version.minor) }}
           retention-days: 14
