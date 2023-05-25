@@ -7,3 +7,11 @@ updates:
       open-pull-requests-limit: 10
       assignees:
         - "santoshmahto7"
+
+    - package-ecosystem: "cargo"
+      directory: "/" # Location of package manifests
+      schedule:
+          interval: "weekly"
+      open-pull-requests-limit: 10
+      assignees:
+        - "santoshmahto7"
