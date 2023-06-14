@@ -1,14 +1,9 @@
 name: Build resctl-demo
 
 on:
-  # Don't build on a push but instead build on a schedule.
-  # the cadence of this repository is much higher than resctl-demo.
-  # see https://github.com/iocost-benchmark/iocost-benchmarks-ci/issues/1
-  #
-  # every Monday at 01:00
-  push:
+  # Every Month 01:00 to keep artifacts alive
   schedule:
-    - cron: "0 1 * * 1"
+    - cron: "0 1 1 * *"
   workflow_dispatch:
 
 jobs:
