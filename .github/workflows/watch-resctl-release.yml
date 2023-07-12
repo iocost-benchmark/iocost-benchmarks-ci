@@ -1,6 +1,7 @@
 name: Watch for resctl-demo release
 
 on:
+  push:
   # every day at 01:00
   schedule:
     - cron: "0 1 * * *"
@@ -17,12 +18,12 @@ jobs:
       - name: Check for new release
         run: |
           # one day before current date since this job runs everyday
-          last_check_date=$(date -d"$(date) -1 day" +%FT%TZ)
+          last_check_date=\"$(date -d"$(date) -1 day" +%FT%TZ)\"
 
           publish_date=$(gh release view --repo https://github.com/facebookexperimental/resctl-demo --json publishedAt | jq .publishedAt)
           release_tag=$(gh release view --repo https://github.com/facebookexperimental/resctl-demo --json tagName | jq .tagName)
           if [[ "$publish_date" > "$last_check_date" ]]; then
-            echo "New release (tagname: ${latest_release} found for resctl-demo";
+            echo "New release (tagname: ${release_tag} found for resctl-demo";
             echo "Trigger build resctl-demo workflow.."
             cd ${GITHUB_WORKSPACE}
             gh workflow run build-resctl-demo.yml;
