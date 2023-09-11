@@ -21,7 +21,7 @@ jobs:
           override: true
 
       - name: Checkoutm iocost-benchmarks-ci repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           path: "iocost-benchmarks-ci"
 
