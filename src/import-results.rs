@@ -13,28 +13,7 @@ mod common;
 
 static ALLOWED_PREFIXES: &[&str] = &[
     "https://github.com/",
-    "https://iocost-submit.s3.af-south-1.amazonaws.com/",
-    "https://iocost-submit.s3.ap-east-1.amazonaws.com/",
-    "https://iocost-submit.s3.ap-northeast-1.amazonaws.com/",
-    "https://iocost-submit.s3.ap-northeast-2.amazonaws.com/",
-    "https://iocost-submit.s3.ap-northeast-3.amazonaws.com/",
-    "https://iocost-submit.s3.ap-south-1.amazonaws.com/",
-    "https://iocost-submit.s3.ap-southeast-1.amazonaws.com/",
-    "https://iocost-submit.s3.ap-southeast-2.amazonaws.com/",
-    "https://iocost-submit.s3.ap-southeast-3.amazonaws.com/",
-    "https://iocost-submit.s3.ca-central-1.amazonaws.com/",
-    "https://iocost-submit.s3.eu-central-1.amazonaws.com/",
-    "https://iocost-submit.s3.eu-north-1.amazonaws.com/",
-    "https://iocost-submit.s3.eu-south-1.amazonaws.com/",
-    "https://iocost-submit.s3.eu-west-1.amazonaws.com/",
-    "https://iocost-submit.s3.eu-west-2.amazonaws.com/",
-    "https://iocost-submit.s3.eu-west-3.amazonaws.com/",
-    "https://iocost-submit.s3.me-south-1.amazonaws.com/",
-    "https://iocost-submit.s3.sa-east-1.amazonaws.com/",
-    "https://iocost-submit.s3.us-east-1.amazonaws.com/",
-    "https://iocost-submit.s3.us-east-2.amazonaws.com/",
-    "https://iocost-submit.s3.us-west-1.amazonaws.com/",
-    "https://iocost-submit.s3.us-west-2.amazonaws.com/",
+    "https://iocost-submit-us-east-1.s3.us-east-1.amazonaws.com/",
 ];
 
 fn is_url_allowlisted(link: &str) -> bool {
