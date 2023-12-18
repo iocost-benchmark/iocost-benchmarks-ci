@@ -34,7 +34,7 @@ jobs:
         run: ${{ format('cd ${{GITHUB_WORKSPACE}}/resctl-demo-{0} && cargo build --release', matrix.version.minor) }}
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ format('resctl-demo-{0}', matrix.version.minor) }}
           retention-days: 14
