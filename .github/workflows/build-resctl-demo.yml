@@ -44,3 +44,13 @@ jobs:
             ${{ format('resctl-demo-{0}/target/release/rd-hashd', matrix.version.minor) }}
             ${{ format('resctl-demo-{0}/target/release/resctl-demo', matrix.version.minor) }}
             ${{ format('resctl-demo-{0}/target/release/resctl-bench', matrix.version.minor) }}
+
+  # Keep workflow alive
+  # See https://docs.github.com/en/actions/learn-github-actions/usage-limits-billing-and-administration#disabling-and-enabling-workflows
+  workflow-keepalive:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - uses: liskin/gh-workflow-keepalive@v1.2.1
