@@ -1,9 +1,9 @@
 name: Build resctl-demo
 
 on:
-  # Every Month 01:00 to keep artifacts alive
+  # Every Monday 01:00 UTC
   schedule:
-    - cron: "0 1 1 * *"
+    - cron: "0 1 * * 1"
   workflow_dispatch:
 
 jobs:
