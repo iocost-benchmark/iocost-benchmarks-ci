@@ -2,7 +2,7 @@ name: Watch for resctl-demo release
 
 on:
   push:
-  # every day at 01:00
+  # Every day at 01:00
   schedule:
     - cron: "0 1 * * *"
   workflow_dispatch:
