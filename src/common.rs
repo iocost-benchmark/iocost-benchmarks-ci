@@ -214,14 +214,13 @@ impl BenchMerge {
     pub fn create_hwdb_in(&self, target_dir: &Path) -> Result<()> {
         fs::create_dir_all(target_dir).expect("Could not create the target hwdb directory");
 
-        // The hwdb subcommand got introduced in 2.2.4. We use -0 here so that pre-released
-        // versions from git are also considered to match.
-        if !VersionReq::parse(">=2.2.4-0")
+        // The hwdb subcommand was introduced in resctl-bench v2.2.4.
+        if VersionReq::parse("<2.2.4")
             .unwrap()
             .matches(&self.version.semver)
         {
             println!(
-                "Skipping hwdb generation as this version does not have hwdb support: {}",
+                "Skipping hwdb generation as this version of resctl-bench does not have hwdb support: {}",
                 self.version.semver
             );
             return Ok(());
