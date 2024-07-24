@@ -271,7 +271,7 @@ impl BenchMerge {
             format!(".{}", extension)
         };
 
-        let date = chrono::offset::Utc::today();
+        let date = chrono::offset::Utc::now();
 
         let detail = match detail.into() {
             Some(d) => format!("{}-", d),
