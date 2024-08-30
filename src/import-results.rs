@@ -173,7 +173,7 @@ impl HighLevel {
         HighLevel {
             version: version.to_string(),
             model_name: model_name.to_string(),
-            new_files: 1,
+            new_files: 0,
         }
     }
 
