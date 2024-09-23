@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+use regex::Regex;
+use semver::{Version, VersionReq};
 
 use crate::common::{database_directory, run_resctl};
 
@@ -181,26 +183,20 @@ impl HighLevel {
         self.new_files += 1;
     }
 
+    /// Checks if resctl-bench supports the `high-level` option
+    /// (available since v2.2.3)
     fn has_high_level(&self) -> bool {
-        let version_str: Vec<u64> = run_resctl(&self.version, &["--version"])
-            .expect("Could not run resctl-bench to get version")
-            .split_whitespace()
-            .nth(1)
-            .expect("Version string has bad format while splitting at space")
-            .split('-')
-            .next()
-            .expect("Version string has bad format while splitting at -")
-            .split('.')
-            .map(|s| {
-                s.parse::<u64>()
-                    .expect("Failed to parse version number, not an integer")
-            })
-            .collect();
-
-        assert_eq!(version_str.len(), 3);
-
-        // The high-level option was introduced in 2.2.3.
-        !(version_str[0] < 2 || version_str[1] < 2 || version_str[2] < 3)
+        let version_str = run_resctl(&self.version, &["--version"])
+            .expect("Could not run resctl-bench to get version");
+        let re = Regex::new(r"resctl-bench (?<version>\d+\.\d+\.\d+)[^\s]?")
+            .unwrap();
+        let caps = re.captures(&version_str)
+            .expect(&format!("Error parsing resctl-bench --version: {}", version_str));
+        let version = Version::parse(caps.name("version").unwrap().as_str())
+            .unwrap();
+        VersionReq::parse(">=2.2.3")
+            .unwrap()
+            .matches(&version)
     }
 
     fn format_high_level(&self) -> String {
