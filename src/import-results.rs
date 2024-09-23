@@ -18,16 +18,19 @@ static ALLOWED_PREFIXES: &[&str] = &[
     "https://iocost-submit-us-east-1.s3.us-east-1.amazonaws.com/",
 ];
 
+/// Returns `true` if the URL specified in `link` is allowed according
+/// to its domain name. Returns `false` otherwise.
 fn is_url_allowlisted(link: &str) -> bool {
     for prefix in ALLOWED_PREFIXES {
         if link.starts_with(prefix) {
             return true;
         }
     }
-
     false
 }
 
+/// Extracts the URLs found in a Github issue context.
+/// Only open and unlocked issues are processed
 fn get_urls(context: &json::JsonValue) -> Result<Vec<String>> {
     let issue = &context["event"]["issue"];
 
@@ -58,7 +61,6 @@ fn get_urls(context: &json::JsonValue) -> Result<Vec<String>> {
     let mut urls = vec![];
     for link in linkify::LinkFinder::new().links(body) {
         let link = link.as_str();
-
         if is_url_allowlisted(link) && link.ends_with(".json.gz") {
             println!("URL found: {}", link);
             urls.push(link.to_string());
@@ -69,13 +71,13 @@ fn get_urls(context: &json::JsonValue) -> Result<Vec<String>> {
             );
         }
     }
-
     Ok(urls)
 }
 
+/// Models a resctl-bench result submitted in a github issue.
 #[derive(Serialize)]
 struct BenchResult {
-    issue: u64,
+    issue_id: u64,
     url: String,
     #[serde(skip_serializing)]
     path: String,
@@ -84,10 +86,14 @@ struct BenchResult {
 }
 
 impl BenchResult {
-    async fn new(issue: u64, url: String) -> Result<Self> {
+    /// Creates a BenchResult from a github issue id and a link to the
+    /// resctl-bench results (json file).
+    async fn new(issue_id: u64, url: String) -> Result<Self> {
         let path = BenchResult::download_url(&url).await?;
         let json = &load_json(&path)?[0];
-
+        // Data taken from the json file:
+        //  - resctl-bench version
+        //  - device model name
         let version = {
             let v = semver::Version::parse(
                 json["sysinfo"]["bench_version"]
@@ -97,15 +103,13 @@ impl BenchResult {
             )?;
             format!("{}.{}", v.major, v.minor)
         };
-
         let model_name = json["sysinfo"]["sysreqs_report"]["scr_dev_model"]
             .to_string()
             .split_whitespace()
             .collect::<Vec<&str>>()
             .join("_");
-
         Ok(BenchResult {
-            issue,
+            issue_id,
             url,
             path,
             version,
@@ -113,12 +117,15 @@ impl BenchResult {
         })
     }
 
+    /// Downloads a file and saves it into a gzipped file with a unique
+    /// name based on the file contents.
     async fn download_url(url: &str) -> Result<String> {
         let response = reqwest::get(url).await?;
 
         let contents = response.bytes().await?;
 
-        // Use md5sum of the data as filename, we only care about exact duplicates.
+        // Use md5sum of the data as filename, we only care about exact
+        // duplicates.
         let path = format!("result-{:x}.json.gz", md5::compute(&contents));
 
         let mut file = fs::File::create(&path)?;
@@ -127,6 +134,7 @@ impl BenchResult {
         Ok(path)
     }
 
+    /// Runs resctl-demo to validate the file in self.path.
     fn validate(&self) -> Result<()> {
         run_resctl(
             &self.version,
@@ -135,9 +143,15 @@ impl BenchResult {
         .map(|_| ())
     }
 
+    /// Stores the results file, together with a metadata file, in the
+    /// appropriate directory in the repo pointed by index, creating the
+    /// directories if needed.
+    ///
+    /// The metadata file is just the json-serialized output of `self`
+    /// (BenchResult).
     fn add_to_database(&self, index: &mut Index) -> Result<()> {
         // Save PDF for artifact.
-        let pdfs_dir = PathBuf::from(".").join(&format!("pdfs-for-{}", self.issue));
+        let pdfs_dir = PathBuf::from(".").join(&format!("pdfs-for-{}", self.issue_id));
         save_pdf_to(&self.version, &PathBuf::from(&self.path), &pdfs_dir, None)?;
 
         let model_directory = database_directory(&self.version, &self.model_name);
@@ -159,11 +173,15 @@ impl BenchResult {
         Ok(())
     }
 
+    /// Provides a unique identifier for a BenchResult, suitable as a
+    /// hash table key.
     fn merge_id(&self) -> String {
         format!("{}-{}", self.version, self.model_name)
     }
 }
 
+
+/// Models a resctl-bench high-level summary output
 struct HighLevel {
     version: String,
     model_name: String,
@@ -199,13 +217,14 @@ impl HighLevel {
             .matches(&version)
     }
 
+    /// Runs resctl-bench to generate a high-level summary, if
+    /// available, and returns it as a String.
     fn format_high_level(&self) -> String {
         if !self.has_high_level() {
             return String::new();
         }
 
         let path = merged_file(&self.version, &self.model_name, None);
-
         BenchMerge::do_merge(
             &self.version,
             &database_directory(&self.version, &self.model_name),
@@ -230,18 +249,14 @@ impl HighLevel {
 async fn main() -> Result<()> {
     let context = json::parse(&std::env::var("GITHUB_CONTEXT")?)?;
     let issue_id = context["event"]["issue"]["number"].as_u64().unwrap();
-
     let git_repo = git2::Repository::open(".")?;
     let mut index = git_repo.index()?;
-
     let mut merged = HashMap::new();
+    let mut errors = vec![];
 
     // Download and validate all provided URLs.
-    let urls = get_urls(&context)?;
-    let mut errors = vec![];
-    for url in urls {
+    for url in get_urls(&context)? {
         let bench_result = BenchResult::new(issue_id, url).await?;
-
         if let Err(e) = bench_result.validate() {
             errors.push(format!(
                 "= File {} failed validation: =\n\n{}",
@@ -249,15 +264,12 @@ async fn main() -> Result<()> {
             ));
             continue;
         }
-
         bench_result.add_to_database(&mut index)?;
-
         merged
             .entry(bench_result.merge_id())
             .or_insert_with(|| HighLevel::new(&bench_result.version, &bench_result.model_name))
             .increment();
     }
-
     if !errors.is_empty() {
         octocrab::OctocrabBuilder::new()
             .personal_token(context["token"].as_str().unwrap().to_string())
@@ -269,7 +281,6 @@ async fn main() -> Result<()> {
             .create_comment(issue_id, errors.join("\n\n"))
             .await?;
     }
-
     if merged.is_empty() {
         println!("Found no new results files to merge...");
         return Ok(());
@@ -277,12 +288,7 @@ async fn main() -> Result<()> {
 
     // Commit the new and changed files.
     let sig = git2::Signature::now("iocost bot", "iocost-bot@has.no.email")?;
-
     let parent_commit = git_repo.head()?.peel_to_commit()?;
-
-    let oid = index.write_tree()?;
-    let tree = git_repo.find_tree(oid)?;
-
     let description = format!(
         "Closes #{}\n\n{}",
         issue_id,
@@ -298,20 +304,17 @@ async fn main() -> Result<()> {
             .collect::<Vec<String>>()
             .join("\n")
     );
-
-    let commit_title = format!("Automated update from issue {}", issue_id);
-
-    let commit_message = format!("{commit_title}\n\n{description}");
-
     let commit = git_repo.commit(
         Some("HEAD"),
         &sig,
         &sig,
-        &commit_message,
-        &tree,
+        // Commit message
+        &format!("Automated update from issue {}\n\n{}",
+            issue_id,
+            description),
+        &git_repo.find_tree(index.write_tree()?)?,
         &[&parent_commit],
     )?;
-
     let branch_name = format!("iocost-bot/{}", issue_id);
     git_repo.branch(&branch_name, &git_repo.find_commit(commit)?, true)?;
 
