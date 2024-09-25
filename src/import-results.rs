@@ -6,10 +6,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use regex::Regex;
-use semver::{Version, VersionReq};
+use semver::VersionReq;
 
-use crate::common::{database_directory, run_resctl};
+use crate::common::{database_directory, run_resctl, BenchVersion};
 
 mod common;
 
@@ -201,26 +200,16 @@ impl HighLevel {
         self.new_files += 1;
     }
 
-    /// Checks if resctl-bench supports the `high-level` option
-    /// (available since v2.2.3)
-    fn has_high_level(&self) -> bool {
-        let version_str = run_resctl(&self.version, &["--version"])
-            .expect("Could not run resctl-bench to get version");
-        let re = Regex::new(r"resctl-bench (?<version>\d+\.\d+\.\d+)[^\s]?")
-            .unwrap();
-        let caps = re.captures(&version_str)
-            .expect(&format!("Error parsing resctl-bench --version: {}", version_str));
-        let version = Version::parse(caps.name("version").unwrap().as_str())
-            .unwrap();
-        VersionReq::parse(">=2.2.3")
-            .unwrap()
-            .matches(&version)
-    }
-
     /// Runs resctl-bench to generate a high-level summary, if
     /// available, and returns it as a String.
     fn format_high_level(&self) -> String {
-        if !self.has_high_level() {
+        // Get the high-level summary only if `resctl-bench` supports
+        // that option (available since v2.2.3)
+        let resctl_bench_version = BenchVersion::new(&self.version);
+        if VersionReq::parse("<2.2.3")
+            .unwrap()
+            .matches(&resctl_bench_version.semver)
+        {
             return String::new();
         }
 

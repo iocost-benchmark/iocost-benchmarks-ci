@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use regex::Regex;
 
 const MINIMUM_DATA_POINTS: usize = 4;
 const MINIMUM_DIFFERENT_RESULTS: u64 = 1;
@@ -16,6 +17,8 @@ pub enum MajorMinor {
     V2_2,
 }
 
+/// Models resctl-bench version info as a `MajorMinor` enum and as a
+/// full `semver` read from the output of resctl-bench --version
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub struct BenchVersion {
     pub major_minor: MajorMinor,
@@ -23,22 +26,23 @@ pub struct BenchVersion {
 }
 
 impl BenchVersion {
+    /// Creates a BenchVersion from a `version` string (X.Y), runs
+    /// `resctl-bench --version` on the appropriate binary version and
+    /// parses the output to get the full version string.
     pub fn new(version: &str) -> Self {
         let major_minor = match version {
             "2.1" => MajorMinor::V2_1,
             "2.2" => MajorMinor::V2_2,
             _ => unimplemented!(),
         };
-
         let version_str = run_resctl(version, &["--version"])
-            .expect("Could not run resctl-bench to get version")
-            .split_whitespace()
-            .nth(1)
-            .expect("Version string has bad format while splitting at space")
-            .to_owned();
-
-        let semver = Version::parse(&version_str).expect("Failed to parse version with semver");
-
+            .expect("Could not run resctl-bench to get version");
+        let re = Regex::new(r"resctl-bench (?<version>\d+\.\d+\.\d+)[^\s]?")
+            .unwrap();
+        let caps = re.captures(&version_str)
+            .expect(&format!("Error parsing resctl-bench --version: {}", version_str));
+        let semver = Version::parse(caps.name("version").unwrap().as_str())
+            .expect("Failed to parse version with semver");
         BenchVersion {
             major_minor,
             semver,
@@ -112,7 +116,8 @@ impl BenchMerge {
             .max_by(|a, b| a.cmp(b))
             .unwrap();
 
-        let output_path = merged_file(version, model_name, max_fwrev.as_str());
+        let output_path = merged_file(version, model_name,
+            Some(max_fwrev.as_str()));
         let mut arguments = vec![
             "--result".to_string(),
             output_path.to_string_lossy().to_string(),
@@ -134,8 +139,9 @@ impl BenchMerge {
         println!("{}", output);
 
         let data_points = Self::get_data_points(&output_path)?;
-        // If there are almost the same number of results for the generic merge as there are for the specific fwrev,
-        // just use the generic one.
+        // If there are almost the same number of results for the
+        // generic merge as there are for the specific fwrev, just use
+        // the generic one.
         if (data_points as i64 - common_data_points as i64).unsigned_abs()
             >= MINIMUM_DIFFERENT_RESULTS
             && data_points >= MINIMUM_DATA_POINTS
@@ -321,6 +327,7 @@ pub fn save_pdf_to(
     .map(|_| ())
 }
 
+/// Reads a gzipped json file, parses it and returns its contents
 #[allow(dead_code)]
 pub fn load_json(filename: &str) -> Result<JsonValue> {
     let f = std::fs::File::open(&filename)?;
@@ -331,6 +338,8 @@ pub fn load_json(filename: &str) -> Result<JsonValue> {
     Ok(json::parse(&String::from_utf8(buf)?)?)
 }
 
+/// Runs a specific `version` of resctl-bench with a list of arguments
+/// (`args`) and returns its output.
 pub fn run_resctl<S: AsRef<std::ffi::OsStr>>(version: &str, args: &[S]) -> Result<String> {
     let bench_path = format!("./resctl-demo-v{}/resctl-bench", version);
     let output = std::process::Command::new(bench_path).args(args).output()?;
@@ -342,24 +351,25 @@ pub fn run_resctl<S: AsRef<std::ffi::OsStr>>(version: &str, args: &[S]) -> Resul
     String::from_utf8(output.stdout).map_err(|e| anyhow!(e))
 }
 
+/// Returns the database directory path for a specific restcl-bench
+/// version and HD model name
 pub fn database_directory(version: &str, model_name: &str) -> PathBuf {
     PathBuf::from(format!("database/{}/{}", version, model_name))
 }
 
-pub fn merged_file<'a, D: Into<Option<&'a str>>>(
-    version: &str,
-    model_name: &str,
-    detail: D,
-) -> PathBuf {
+/// Returns a file path for a merged result file for a specific
+/// resctl-bench `version` and HD `model_name`, with an optional
+/// `detail` string.
+/// It ensures that a "merged-results" output directory exists, creating
+/// it if necessary.
+pub fn merged_file(version: &str, model_name: &str, detail: Option<&str>)-> PathBuf {
     fs::create_dir_all("merged-results").expect("Failed to create merged results dir");
-
-    let detail = match detail.into() {
-        Some(d) => format!("{}-", d),
-        None => "".to_owned(),
+    let detail = match detail {
+        Some(d) => d,
+        None => "",
     };
-
     PathBuf::from("merged-results").join(&format!(
-        "{}-{}-{}merged-results.json.gz",
+        "{}-{}-{}-merged-results.json.gz",
         version, model_name, detail
     ))
 }
