@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Result, Context};
 use glob::glob;
 use json::JsonValue;
 use semver::{Version, VersionReq};
@@ -342,12 +342,20 @@ pub fn load_json(filename: &str) -> Result<JsonValue> {
 /// (`args`) and returns its output.
 pub fn run_resctl<S: AsRef<std::ffi::OsStr>>(version: &str, args: &[S]) -> Result<String> {
     let bench_path = format!("./resctl-demo-v{}/resctl-bench", version);
-    let output = std::process::Command::new(bench_path).args(args).output()?;
-
+    // args as string for error message
+    let args_string = args
+        .iter()
+        .map(|s| s.as_ref().to_str().unwrap())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let output = std::process::Command::new(&bench_path)
+        .args(args)
+        .output()
+        .with_context(
+            || format!("Error running {} {}: ", bench_path, args_string))?;
     if !output.stderr.is_empty() {
         bail!(String::from_utf8(output.stderr)?);
     }
-
     String::from_utf8(output.stdout).map_err(|e| anyhow!(e))
 }
 
