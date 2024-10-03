@@ -1,6 +1,5 @@
 use anyhow::{bail, Result};
 use common::{load_json, merged_file, save_pdf_to, BenchMerge};
-use git2::Index;
 use serde::{Serialize, Deserialize};
 use serde_with::skip_serializing_none;
 use std::collections::HashMap;
@@ -76,14 +75,20 @@ fn get_urls(context: &json::JsonValue) -> Result<Vec<String>> {
     Ok(urls)
 }
 
+async fn download_url(url: &str) -> Result<String> {
+    let response = reqwest::get(url).await?;
+    let contents = response.bytes().await?;
+    // Use md5sum of the data as filename, we only care about exact duplicates.
+    let path = format!("result-{:x}.json.gz", md5::compute(&contents));
+    let mut file = fs::File::create(&path)?;
+    file.write_all(&contents)?;
+    Ok(path)
+}
+
 
 #[skip_serializing_none]
 #[derive(Serialize)]
 struct BenchResult {
-    /// Github issue the result is related to, if any
-    issue: Option<u64>,
-    /// Result file url, if provided through a Github issue
-    url: Option<String>,
     /// Drive model name
     model_name: String,
     /// Path to the result directory in the database
@@ -94,13 +99,17 @@ struct BenchResult {
     result_file: String,
     /// resctl-bench version used to generate the result (major.minor)
     version: String,
+    /// Github issue the result is related to, if any
+    issue: Option<u64>,
+    /// Result file url, if provided through a Github issue
+    url: Option<String>,
 }
 
 impl BenchResult {
     /// Creates a BenchResult extracting the model and version info from
     /// a json file (`json_result_file`) and set it to store the output
     /// data into `database_path`
-    async fn new_from_file(json_result_file: &str, database_path: &str)
+    async fn new(json_result_file: &str, database_path: &str)
     -> Result<Self>
     {
         let result = load_json(&json_result_file)
@@ -124,60 +133,13 @@ impl BenchResult {
             .into_os_string()
             .into_string().unwrap();
         Ok(BenchResult {
-            issue: None,
-            url: None,
             model_name,
             dir,
             result_file: json_result_file.to_string(),
-            version
+            version,
+            issue: None,
+            url: None
         })
-    }
-
-    /// Creates a BenchResult extracting the model and version info from
-    /// a remote json file (`url`), associating it to a Github `issue`
-    /// and setting it to store the output
-    /// data into `database_path`
-    async fn new_from_issue(issue: u64, url: &str, database_path: &str)
-    -> Result<Self>
-    {
-        let path = BenchResult::download_url(&url).await?;
-        let json = &load_json(&path)?[0];
-        let full_version = json[0]["sysinfo"]["bench_version"]
-            .to_string()
-            .split_whitespace()
-            .collect::<Vec<_>>()[0]
-            .to_string();
-        let version = {
-            let v = semver::Version::parse(&full_version)?;
-            format!("{}.{}", v.major, v.minor)
-        };
-        semver::Version::parse(&full_version)?;
-        let model_name = json[0]["sysinfo"]["sysreqs_report"]["scr_dev_model"]
-            .to_string()
-            .replace(" ", "_");
-        let dir = PathBuf::from(database_path)
-            .join(&version)
-            .join(&model_name)
-            .into_os_string()
-            .into_string().unwrap();
-        Ok(BenchResult {
-            issue: Some(issue),
-            url: Some(String::from(url)),
-            model_name,
-            dir,
-            result_file: path,
-            version
-        })
-    }
-
-    async fn download_url(url: &str) -> Result<String> {
-        let response = reqwest::get(url).await?;
-        let contents = response.bytes().await?;
-        // Use md5sum of the data as filename, we only care about exact duplicates.
-        let path = format!("result-{:x}.json.gz", md5::compute(&contents));
-        let mut file = fs::File::create(&path)?;
-        file.write_all(&contents)?;
-        Ok(path)
     }
 
     /// Runs resctl-demo to validate the file in self.path.
@@ -189,56 +151,46 @@ impl BenchResult {
         Ok(())
     }
 
-    /// Stores the results file, together with a metadata file and the
-    /// pdf output, in the appropriate directory in the repo pointed by
-    /// index, creating the directories if needed.
-    ///
-    /// If an `id` string is specified, it's used as a suffix for some
-    /// of the generated directories and files
-    ///
-    /// The metadata file is just the json-serialized output of `self`
-    /// (BenchResult).
-    fn add_to_database(&self, id: Option<&str>, repo_index: Option<&mut Index>) -> Result<()> {
-        // NOTE: the result file is expected to have extension .json.gz
+    /// Returns a path for the result file in the DB
+    fn db_file(&self) -> PathBuf {
+        PathBuf::from(&self.dir).join(&self.result_file)
+    }
+
+    /// Returns a path for the metadata file in the DB
+    fn metadata_file_path(&self) -> PathBuf {
         let basename = Path::new(&self.result_file)
             .with_extension("")
             .with_extension("")
             .to_str()
             .unwrap()
             .to_string();
+        let mut metadata_filepath = PathBuf::from(&self.dir).join(basename);
+        metadata_filepath.set_extension("json.metadata");
+        metadata_filepath
+    }
+
+    /// Processes the result and stores the output files in the DB.
+    /// If an `id` string is provided, it'll be used to name the
+    /// directory for the pdf outputs
+    fn add_to_database(&self, id: Option<&str>) -> Result<()> {
         let pdfs_dir = match id {
             Some(id) => PathBuf::from(".")
                 .join(&format!("pdfs-for-{}", id)),
             None => {
-                if let Some(issue) = &self.issue {
-                    PathBuf::from(".")
-                        .join(&format!("pdfs-for-{}", issue))
-                } else {
-                    PathBuf::from(".")
-                        .join(&format!("pdfs-for-{}-{}", &self.model_name, &self.version))
-                }
+                PathBuf::from(".")
+                    .join(&format!("pdfs-for-{}-{}", &self.model_name, &self.version))
             }
         };
         save_pdf_to(&self.version, &PathBuf::from(&self.result_file), &pdfs_dir, None)?;
         // Generate DB directory and place the result file there
         fs::create_dir_all(&self.dir).ok();
-        let db_file = PathBuf::from(&self.dir).join(&self.result_file);
-        fs::rename(&self.result_file, &db_file)?;
+        fs::rename(&self.result_file, &self.db_file())?;
         // Create metadata file and save it in the DB dir
-        let mut metadata_filepath = PathBuf::from(&self.dir).join(basename);
-        metadata_filepath.set_extension("json.metadata");
-        let mut metadata_file = fs::File::create(&metadata_filepath)?;
+        let mut metadata_file = fs::File::create(&self.metadata_file_path())?;
         write!(metadata_file, "{}", serde_json::to_string(self)?)?;
-
-        // Add new files to repo index, if specified
-        if let Some(index) = repo_index {
-            index.add_path(&db_file)?;
-            index.add_path(&metadata_filepath)?;
-        }
         Ok(())
     }
 }
-
 
 /// Models a resctl-bench high-level summary output
 struct HighLevel {
@@ -306,20 +258,24 @@ async fn run_as_gh_workflow(envvar: &str, database_path: &str) -> Result<()>{
     let urls = get_urls(&context)?;
     let mut errors = vec![];
     for url in urls {
-        let bench_result = BenchResult::new_from_issue(
-            issue_id,
-            &url,
-            database_path).await?;
-        if let Err(e) = bench_result.validate() {
+        // Download resctl-bench result, process and validate it,
+        // and add it to the database and the repo
+        let path = download_url(&url).await?;
+        let mut result = BenchResult::new(&path, database_path).await?;
+        result.issue = Some(issue_id);
+        result.url = Some(url.clone());
+        if let Err(e) = result.validate() {
             errors.push(
                 format!("File {} failed validation: \n\n{}", url, e)
             );
             continue;
         }
-        bench_result.add_to_database(None, Some(&mut index))?;
+        result.add_to_database(Some(&issue_id.to_string()))?;
+        index.add_path(&result.db_file())?;
+        index.add_path(&result.metadata_file_path())?;
         merged
-            .entry(format!("{}-{}", &bench_result.version, &bench_result.model_name))
-            .or_insert_with(|| HighLevel::new(&bench_result.version, &bench_result.model_name))
+            .entry(format!("{}-{}", &result.version, &result.model_name))
+            .or_insert_with(|| HighLevel::new(&result.version, &result.model_name))
             .increment();
     }
 
@@ -416,7 +372,6 @@ struct Input {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Cli::parse();
-    println!("args: {:?}", args);
 
     // Load config from toml file
     let config_file_path = args.config_file.unwrap();
@@ -433,12 +388,12 @@ async fn main() -> Result<()> {
 
     if let Some(result_file) = args.input.result {
         // Run with result file as input
-        let bench_result = BenchResult::new_from_file(
+        let bench_result = BenchResult::new(
             &result_file,
             &config.config.database_dir).await?;
         bench_result.validate()
             .expect(&format!("File {} failed validation", &result_file));
-        bench_result.add_to_database(None, None)?;
+        bench_result.add_to_database(None)?;
     } else {
         // Run as part of a Github workflow
         run_as_gh_workflow(
