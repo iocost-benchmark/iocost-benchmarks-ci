@@ -8,7 +8,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use semver::VersionReq;
-use clap::{Parser, Args};
+use clap::Parser;
 
 use crate::common::{database_directory, run_resctl, BenchVersion};
 
@@ -345,61 +345,72 @@ struct TomlData {
 /// Struct to parse the [config] section of the config toml file
 #[derive(Debug, Deserialize)]
 struct Config {
-    database_dir: String,
+    database_dir: Option<String>,
 }
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
 /// Imports resctl-bench results into a common database
+///
+/// By default, it runs as part of a Github workflow, reading the input
+/// from an environment variable (GITHUB_CONTEXT). Run with -r
+/// (--result) to specify a local result file.
 struct Cli {
     /// Path of the toml config file to load
-    #[arg(short, long, value_name = "FILE", default_value = "config.toml")]
+    #[arg(short, long, value_name = "FILE")]
     config_file: Option<String>,
-
-    #[command(flatten)]
-    input: Input,
-}
-
-#[derive(Args, Debug)]
-#[group(required = true, multiple = false)]
-struct Input {
-    /// Run as part of a Github workflow and load the context from this envvar
-    #[arg(short, long)]
-    gh_workflow: bool,
 
     /// Result file to process
     #[arg(short, long, value_name = "FILE.json.gz")]
     result: Option<String>,
+
+    /// Output database dir
+    #[arg(short, long, value_name = "DIR", default_value = "database")]
+    database_dir: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Cli::parse();
 
-    // Load config from toml file
-    let config_file_path = args.config_file.unwrap();
-    let config: TomlData = match fs::read_to_string(&config_file_path) {
-        Ok(contents) => {
-            toml::from_str(&contents)
-                .expect(&format!("Error parsing toml file {}", config_file_path))
+    // Load config from toml file, if specified
+    let config: Option<TomlData> = match args.config_file {
+        Some(path) => {
+            match fs::read_to_string(&path) {
+                Ok(contents) => {
+                    toml::from_str(&contents)
+                        .expect(&format!("Error parsing toml file {}", &path))
+                },
+                Err(_) => {
+                    eprintln!("Can't open config file: {}", &path);
+                    exit(1);
+                }
+            }
         },
-        Err(_) => {
-            eprintln!("Can't open config file: {}", config_file_path);
-            exit(1);
-        }
+        None => None,
     };
 
-    if let Some(result_file) = args.input.result {
+    // Process general parameters
+    let database_dir;
+    if let Some(config) = config {
+        database_dir = config.config.database_dir.unwrap_or(args.database_dir.unwrap());
+    } else {
+        database_dir = args.database_dir.unwrap()
+    }
+
+    if let Some(result_file) = args.result {
         // Run with result file as input
         let bench_result = BenchResult::new(
             &result_file,
-            &config.config.database_dir).await?;
+            &database_dir).await?;
         bench_result.validate()
             .expect(&format!("File {} failed validation", &result_file));
         bench_result.add_to_database(None)?;
     } else {
         // Run as part of a Github workflow
-        run_as_gh_workflow(&config.config.database_dir).await?;
+        println!("No result file specified: reading result info from \
+                  Github workflow ({} envvar)", GH_CONTEXT_ENVVAR);
+        run_as_gh_workflow(&database_dir).await?;
     }
 
     exit(1);
