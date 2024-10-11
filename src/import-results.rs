@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Result, Context};
 use common::{load_json, merged_file, save_pdf_to, BenchMerge};
 use serde::{Serialize, Deserialize};
 use serde_with::skip_serializing_none;
@@ -18,6 +18,7 @@ static ALLOWED_PREFIXES: &[&str] = &[
     "https://github.com/",
     "https://iocost-submit-us-east-1.s3.us-east-1.amazonaws.com/",
 ];
+static GH_CONTEXT_ENVVAR: &str = "GITHUB_CONTEXT";
 
 /// Returns `true` if the URL specified in `link` is allowed according
 /// to its domain name. Returns `false` otherwise.
@@ -246,8 +247,10 @@ impl HighLevel {
     }
 }
 
-async fn run_as_gh_workflow(envvar: &str, database_path: &str) -> Result<()>{
-    let context = json::parse(&std::env::var(envvar)?)?;
+async fn run_as_gh_workflow(database_path: &str) -> Result<()>{
+    let envvar_contents = std::env::var(GH_CONTEXT_ENVVAR)
+        .context(format!("Can't read environment variable {}", GH_CONTEXT_ENVVAR))?;
+    let context = json::parse(&envvar_contents)?;
     let issue_id = context["event"]["issue"]["number"].as_u64().unwrap();
     let git_repo = git2::Repository::open(".")?;
     let mut index = git_repo.index()?;
@@ -361,8 +364,8 @@ struct Cli {
 #[group(required = true, multiple = false)]
 struct Input {
     /// Run as part of a Github workflow and load the context from this envvar
-    #[arg(short, long, value_name = "envvar", default_value = "GITHUB_CONTEXT")]
-    gh_workflow: Option<String>,
+    #[arg(short, long)]
+    gh_workflow: bool,
 
     /// Result file to process
     #[arg(short, long, value_name = "FILE.json.gz")]
@@ -396,9 +399,7 @@ async fn main() -> Result<()> {
         bench_result.add_to_database(None)?;
     } else {
         // Run as part of a Github workflow
-        run_as_gh_workflow(
-            &args.input.gh_workflow.unwrap(),
-            &config.config.database_dir).await?;
+        run_as_gh_workflow(&config.config.database_dir).await?;
     }
 
     exit(1);
