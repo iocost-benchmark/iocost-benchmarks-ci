@@ -11,16 +11,19 @@ mod common;
 
 /// Writes a hwdb header in `hwdb_file` containing data information and
 /// a reference to `commit_id`
-fn write_hwdb_file_header(hwdb_file: &mut fs::File, commit_id: &str) -> Result<()> {
-    let hwdb_text = format!(r#"# This file is auto-generated on {date}.
-# From the following commit:
-# https://github.com/iocost-benchmark/iocost-benchmarks/commit/{commit_id}
-#
+fn write_hwdb_file_header(hwdb_file: &mut fs::File, commit_id: Option<String>) -> Result<()> {
+    let mut hwdb_text = format!("# This file was auto-generated on {}.\n",
+        chrono::Utc::now().to_rfc2822());
+    if let Some(id) = commit_id {
+        hwdb_text.push_str(&format!(r#"# From the following commit:
+# https://github.com/iocost-benchmark/iocost-benchmarks/commit/{}
+"#, id));
+    }
+    hwdb_text.push_str(r#"#
 # Match key format:
 # block:<devpath>:name:<model name>:fwrev:<firmware revision>:
-"#,
-        date = chrono::Utc::now().to_rfc2822(),
-        commit_id = commit_id);
+
+"#);
     writeln!(hwdb_file, "{}", hwdb_text)?;
     Ok(())
 }
@@ -70,10 +73,16 @@ async fn main() -> Result<()> {
     }
 
     println!("Generating final hwdb file...");
-    let context = json::parse(&std::env::var("GITHUB_CONTEXT")?)?;
+    let github_id = match std::env::var("GITHUB_CONTEXT") {
+        Ok(context_str) => {
+            let context = json::parse(&context_str)?;
+            Some(context["sha"].to_string())
+        }
+        _ => None
+    };
     let mut hwdb_file =
         fs::File::create("90-iocost-tune.hwdb").expect("Failed to create hwdb file");
-    write_hwdb_file_header(&mut hwdb_file, context["sha"].as_str().unwrap())?;
+    write_hwdb_file_header(&mut hwdb_file, github_id)?;
 
     let models: Vec<String> = merges.iter().map(|m| m.key().clone()).collect();
     for model in models {
