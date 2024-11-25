@@ -205,7 +205,7 @@ impl BenchMerge {
 
     fn result_paths_for(directory: &Path) -> Result<Vec<PathBuf>> {
         Ok(
-            glob(&format!("{}/result-*.json.gz", directory.to_string_lossy()))
+            glob(&format!("{}/*.json.gz", directory.to_string_lossy()))
                 .unwrap()
                 .flatten()
                 .collect(),
