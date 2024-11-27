@@ -406,13 +406,11 @@ async fn main() -> Result<()> {
             &database_dir).await?;
         bench_result.validate()
             .expect(&format!("File {} failed validation", &result_file));
-        bench_result.add_to_database(None)?;
+        return bench_result.add_to_database(None);
     } else {
         // Run as part of a Github workflow
         println!("No result file specified: reading result info from \
                   Github workflow ({} envvar)", GH_CONTEXT_ENVVAR);
-        run_as_gh_workflow(&database_dir).await?;
+        return run_as_gh_workflow(&database_dir).await;
     }
-
-    exit(1);
 }
