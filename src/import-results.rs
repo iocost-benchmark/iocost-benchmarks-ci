@@ -252,6 +252,7 @@ async fn run_as_gh_workflow(database_path: &str) -> Result<()>{
     let envvar_contents = std::env::var(GH_CONTEXT_ENVVAR)
         .context(format!("Can't read environment variable {}", GH_CONTEXT_ENVVAR))?;
     let context = json::parse(&envvar_contents)?;
+    println!("context: {}", &context);
     let issue_id = context["event"]["issue"]["number"].as_u64().unwrap();
     let git_repo = git2::Repository::open(".")?;
     let mut index = git_repo.index()?;
