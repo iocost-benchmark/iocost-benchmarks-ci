@@ -17,6 +17,7 @@ mod common;
 static ALLOWED_PREFIXES: &[&str] = &[
     "https://github.com/",
     "https://iocost-submit-us-east-1.s3.us-east-1.amazonaws.com/",
+    "https://iocost-submit-eu-north-1.s3.eu-north-1.amazonaws.com/",
 ];
 static GH_CONTEXT_ENVVAR: &str = "GITHUB_CONTEXT";
 
